@@ -821,7 +821,7 @@ class GeminiLiveAPI:
                     time.sleep(delay)
                     continue
                 if not wav and attempt < max_retries:
-                    status.set_message(f"chunk {idx + 1}: no audio, retrying ({attempt + 1}/{max_retries})")
+                    status.set_message(f"chunk {idx + 1}: no audio, retrying ({attempt + 1}/{max_retries}) in {retry_delay:.0f}s")
                     time.sleep(retry_delay)
             with results_lock:
                 results[idx] = wav
