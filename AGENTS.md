@@ -43,10 +43,9 @@ CONTRIBUTING.md           How to add voice characters
 ## Key Conventions
 
 - **Never commit without explicit user instruction.** Wait for the user to say "ok commit", "commit it", or similar before running `git commit`.
-- **Always show git user config before committing** — display the name and email so the user can confirm who the commit will be attributed to:
-  ```bash
-  git config user.name && git config user.email
-  ```
+- **Always announce who is committing before running `git commit`** — print a line in the format:
+  `Committing on behalf of ibenian (ibenian@yahoo.com)`
+  using the output of `git config user.name` and `git config user.email`.
 - **Versioning**: tag first (`v0.1.7`), then bump `pyproject.toml` to next version (`0.1.8`) and commit. See version-bump skill.
 - **Release tags only** — consumers pin to a git tag. Never tell users to install from `main`.
 - **`prepare_text` is called by the caller**, not inside `stream_parallel_wav` / `astream_parallel_wav`. Keep it that way.
