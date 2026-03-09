@@ -1,0 +1,83 @@
+# gemini-live-tools — Agent Guidelines
+
+## Project Overview
+
+`gemini-live-tools` is a Python library providing:
+- **Parallel TTS streaming** via Gemini Live API with voice characters
+- **Safe math expression evaluator** (AST-based, numpy-backed)
+- **JS widget** — drop-in voice/character picker for browser UIs
+
+It is used as a dependency by other projects (e.g. algebench), pinned to a release tag.
+
+## Running the Demo
+
+```bash
+./dev.sh setup                                        # create .venv and install deps
+./dev.sh test                                         # run interactive greeting demo
+./dev.sh test --parallelism 4                         # parallel TTS mode
+./dev.sh test --parallelism 4 --min-sentence-chars 60 --min-buffer-seconds 10
+./dev.sh shell                                        # drop into .venv shell
+```
+
+## Project Structure
+
+```
+python/
+  gemini_live_tools/
+    gemini_live_api.py     GeminiLiveAPI, character definitions, PCM/WAV helpers
+    math_eval.py           Safe AST-based math evaluator
+    static/
+      voice-character-selector.js   Bundled JS widget (served via get_static_content())
+  greet_demo.py            Interactive CLI demo
+
+js/
+  voice-character-selector.js   Source JS widget (copy kept in sync with static/)
+
+docs/
+  streaming-tts-endpoint.md    FastAPI streaming endpoint guide with cancellation
+
+dev.sh                    Dev helper: setup / test / shell
+CONTRIBUTING.md           How to add voice characters
+```
+
+## Key Conventions
+
+- **Never commit without explicit user instruction.**
+- **Always show git user config before committing**:
+  ```bash
+  git config user.name && git config user.email
+  ```
+- **Versioning**: tag first (`v0.1.7`), then bump `pyproject.toml` to next version (`0.1.8`) and commit. See version-bump skill.
+- **Release tags only** — consumers pin to a git tag. Never tell users to install from `main`.
+- **`prepare_text` is called by the caller**, not inside `stream_parallel_wav` / `astream_parallel_wav`. Keep it that way.
+- **Sentence boundaries**: `[long pause]` and `[medium pause]` tags split sentences in `_split_sentences`. The tag is kept at the start of the next chunk.
+- **Quota awareness**: each sentence = one Gemini API request. Avoid very small `min_sentence_chars` in production (free tier is 100 req/day).
+- **`.venv` is local** — recreate with `./dev.sh setup` if broken.
+
+## Release Flow
+
+1. Tag the current commit: `git tag vX.Y.Z && git push origin vX.Y.Z`
+2. Bump `python/pyproject.toml` to next patch and commit: `chore: bump version to X.Y.Z`
+3. Push
+
+## Key API
+
+```python
+from gemini_live_tools import GeminiLiveAPI
+
+api = GeminiLiveAPI(api_key="...")
+
+# Single-shot
+prepared = api.prepare_text(text, character_name="crisp")
+wav = api.synthesize_wav(prepared, character_name="crisp")
+
+# Parallel sync streaming
+for chunk in api.stream_parallel_wav(prepared, parallelism=4, character_name="crisp"):
+    play(chunk)
+
+# Parallel async streaming (FastAPI)
+async for chunk in api.astream_parallel_wav(prepared, parallelism=4, character_name="crisp"):
+    yield chunk
+```
+
+See [`docs/streaming-tts-endpoint.md`](docs/streaming-tts-endpoint.md) for the full FastAPI endpoint + JS client example.
