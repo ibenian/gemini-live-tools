@@ -33,6 +33,28 @@ import ast
 import math
 
 # ---------------------------------------------------------------------------
+# Resource limits — prevent DoS via unbounded computation
+# ---------------------------------------------------------------------------
+
+# Max length of the expression string (characters).
+_MAX_EXPR_LEN = 500
+
+# Max integer result bit-length for the ** operator.
+# 65 536 bits ≈ 19 700 decimal digits — far larger than any legitimate math
+# result, yet small enough to prevent memory exhaustion.
+_MAX_RESULT_BITS = 65_536
+
+# Max argument to factorial().
+# factorial(20 000) completes in under a second and produces ~77 000 digits.
+_MAX_FACTORIAL_ARG = 20_000
+
+# Max repetition multiplier for list/string * int.
+_MAX_SEQ_REPEAT = 10_000
+
+# Max number of sweep points in eval_math_sweep.
+_MAX_SWEEP_STEPS = 100_000
+
+# ---------------------------------------------------------------------------
 # NumPy — optional, enables linalg functions
 # ---------------------------------------------------------------------------
 
@@ -65,7 +87,7 @@ MATH_DOCS = {
     'sum':       'sum(iterable) — sum of elements',
     'range':     'range(stop) / range(start, stop[, step]) — bounded integer range for simple list comprehensions.',
     'pow':       'pow(x, y) — x raised to y',
-    'factorial': 'factorial(n) — n! Example: factorial(5) = 120',
+    'factorial': f'factorial(n) — n! (max n={_MAX_FACTORIAL_ARG}). Example: factorial(5) = 120',
     'gcd':       'gcd(a, b) — greatest common divisor. Example: gcd(12, 8) = 4',
 
     # Roots / exponentials
@@ -139,6 +161,79 @@ MATH_DOCS = {
 }
 
 # ---------------------------------------------------------------------------
+# Safe wrappers — enforce resource limits at call time
+# ---------------------------------------------------------------------------
+
+def _safe_factorial(n):
+    """Bounded factorial. Raises ValueError when n > _MAX_FACTORIAL_ARG."""
+    if isinstance(n, float):
+        if not n.is_integer():
+            raise ValueError(f"factorial requires an integer argument, got {n!r}")
+        n = int(n)
+    if not isinstance(n, int):
+        raise TypeError(f"factorial requires an integer, got {type(n).__name__}")
+    if n < 0:
+        raise ValueError("factorial is not defined for negative numbers")
+    if n > _MAX_FACTORIAL_ARG:
+        raise ValueError(
+            f"factorial({n}) exceeds maximum allowed argument ({_MAX_FACTORIAL_ARG})"
+        )
+    return math.factorial(n)
+
+
+def _safe_pow(base, exp):
+    """Bounded exponentiation. Raises ValueError when the integer result would be too large."""
+    if isinstance(base, int) and isinstance(exp, int) and exp > 0 and abs(base) > 1:
+        try:
+            estimated_bits = exp * math.log2(abs(base))
+        except (ValueError, OverflowError):
+            estimated_bits = float('inf')
+        if estimated_bits >= _MAX_RESULT_BITS:
+            raise ValueError(
+                f"Result too large: {base}**{exp} would require ~{estimated_bits:.0f} bits "
+                f"(max {_MAX_RESULT_BITS}). Use float arithmetic: float({base})**{exp}."
+            )
+    return base ** exp
+
+
+def _safe_mul(a, b):
+    """Multiplication with a sequence-repetition guard."""
+    if isinstance(a, (str, bytes, list, tuple)) and isinstance(b, int) and b > _MAX_SEQ_REPEAT:
+        raise ValueError(
+            f"Sequence repetition too large: *{b} (max {_MAX_SEQ_REPEAT})"
+        )
+    if isinstance(b, (str, bytes, list, tuple)) and isinstance(a, int) and a > _MAX_SEQ_REPEAT:
+        raise ValueError(
+            f"Sequence repetition too large: *{a} (max {_MAX_SEQ_REPEAT})"
+        )
+    return a * b
+
+
+# ---------------------------------------------------------------------------
+# AST transformer — replace ** and * with safe wrappers before evaluation
+# ---------------------------------------------------------------------------
+
+class _SafeOpsTransformer(ast.NodeTransformer):
+    """Replace x**y with _safe_pow(x, y) and x*y with _safe_mul(x, y)."""
+
+    def visit_BinOp(self, node):
+        self.generic_visit(node)  # recurse into children first
+        if isinstance(node.op, ast.Pow):
+            return ast.Call(
+                func=ast.Name(id='_safe_pow', ctx=ast.Load()),
+                args=[node.left, node.right],
+                keywords=[],
+            )
+        if isinstance(node.op, ast.Mult):
+            return ast.Call(
+                func=ast.Name(id='_safe_mul', ctx=ast.Load()),
+                args=[node.left, node.right],
+                keywords=[],
+            )
+        return node
+
+
+# ---------------------------------------------------------------------------
 # help() — callable from within expressions
 # ---------------------------------------------------------------------------
 
@@ -193,7 +288,7 @@ MATH_NAMES = {
     # Rounding / integer
     'floor':     math.floor,
     'ceil':      math.ceil,
-    'factorial': math.factorial,
+    'factorial': _safe_factorial,
     'gcd':       math.gcd,
     # Roots / exponentials
     'sqrt':  math.sqrt,
@@ -415,6 +510,12 @@ def safe_eval_math(expr: str, variables: dict | None = None):
         (result, None)        on success; result is scalar, list, nested list, or string (for help)
         (None,  error_str)    on any error
     """
+    # --- Guard: expression length (checked before parsing to prevent slow parse) ---
+    if len(expr) > _MAX_EXPR_LEN:
+        return None, (
+            f"Expression too long ({len(expr)} chars; max {_MAX_EXPR_LEN})"
+        )
+
     try:
         tree = ast.parse(expr.strip(), mode='eval')
     except SyntaxError as exc:
@@ -431,6 +532,13 @@ def safe_eval_math(expr: str, variables: dict | None = None):
     for node in ast.walk(tree):
         if not isinstance(node, _ALLOWED_NODES):
             return None, f"Disallowed operation: {type(node).__name__}"
+        # Guard: reject oversized string literals (they cannot appear in the
+        # transformed AST either, so this check stays on the original tree).
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if len(node.value) > 200:
+                return None, (
+                    f"String literal too long ({len(node.value)} chars; max 200)"
+                )
         if isinstance(node, ast.ListComp):
             # Restrict list comprehensions to one simple generator with no filters.
             # Allowed iterables:
@@ -517,6 +625,15 @@ def safe_eval_math(expr: str, variables: dict | None = None):
                 return None, err
             namespace[k] = coerced
 
+    # Apply AST transformer: rewrite x**y → _safe_pow(x,y) and x*y → _safe_mul(x,y).
+    # This happens AFTER whitelist validation so the injected Call nodes do not
+    # need to appear in all_names. The private wrappers are added to the namespace
+    # directly and are never callable by user expressions (they start with '_').
+    tree = _SafeOpsTransformer().visit(tree)
+    ast.fix_missing_locations(tree)
+    namespace['_safe_pow'] = _safe_pow
+    namespace['_safe_mul'] = _safe_mul
+
     try:
         result = eval(compile(tree, '<math>', 'eval'), {"__builtins__": {}}, namespace)
         return _to_python(result), None
@@ -584,6 +701,10 @@ def eval_math_sweep(expr: str, variables: dict | None = None, sweep: dict | None
         return xf
 
     if isinstance(spec, list):
+        if len(spec) > _MAX_SWEEP_STEPS:
+            return None, (
+                f"sweep values list too large: {len(spec)} points (max {_MAX_SWEEP_STEPS})"
+            )
         points = [_coerce_point(x) for x in spec]
     elif isinstance(spec, dict):
         try:
@@ -594,6 +715,8 @@ def eval_math_sweep(expr: str, variables: dict | None = None, sweep: dict | None
             return None, f"sweep spec error: {exc} — expected {{start, end, steps}}"
         if steps < 2:
             return None, "sweep steps must be >= 2"
+        if steps > _MAX_SWEEP_STEPS:
+            return None, f"sweep steps too large: {steps} (max {_MAX_SWEEP_STEPS})"
         if HAS_NUMPY:
             import numpy as _np
             points = [_coerce_point(x) for x in _np.linspace(start, end, steps).tolist()]
