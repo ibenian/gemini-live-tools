@@ -43,7 +43,7 @@ CONTRIBUTING.md           How to add voice characters
 ## Key Conventions
 
 - **Never commit without explicit user instruction.** Wait for the user to say "ok commit", "commit it", or similar before running `git commit`.
-- **Always show git user config before committing**:
+- **Always show git user config before committing** — display the name and email so the user can confirm who the commit will be attributed to:
   ```bash
   git config user.name && git config user.email
   ```
