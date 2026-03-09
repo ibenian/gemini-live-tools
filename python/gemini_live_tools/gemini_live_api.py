@@ -217,6 +217,91 @@ def _split_sentences(text: str, min_chars: int = 80) -> list:
     return merged if merged else [text.strip()]
 
 
+class ParallelTTSStatus:
+    """Thread-safe single-line status display for parallel TTS progress.
+
+    Renders a compact, updating status line::
+
+        [TTS-Parallel] Received 4/8 [▶ *   * *] Playing 1/8
+
+    Icons: ▶ = currently playing, * = received OK, ! = failed, (space) = pending.
+    When complete, shows a final "Played N/N" line.
+
+    Example::
+
+        status = ParallelTTSStatus(n=8)
+        status.start(parallelism=4)
+        status.mark_received(idx=2, ok=True)
+        status.log("chunk 3 retrying...")
+        status.mark_playing(idx=0)
+        status.mark_played()
+        status.finish()
+    """
+
+    def __init__(self, n: int) -> None:
+        self._n = n
+        self._chunk_state: list = [None] * n  # None=pending, True=ok, False=failed
+        self._playing_idx = -1
+        self._received = 0
+        self._played = 0
+        self._lock = threading.Lock()
+
+    def start(self, parallelism: int) -> None:
+        """Print the initial header line."""
+        print(f"[TTS-Parallel] {self._n} chunks, parallelism={parallelism}")
+
+    def mark_received(self, idx: int, ok: bool) -> None:
+        """Record that chunk `idx` has been synthesized (ok=True) or failed (ok=False)."""
+        with self._lock:
+            self._chunk_state[idx] = ok
+            self._received += 1
+            self._render()
+
+    def mark_playing(self, idx: int) -> None:
+        """Record that chunk `idx` is now being played/yielded."""
+        with self._lock:
+            self._playing_idx = idx
+            self._render()
+
+    def mark_played(self) -> None:
+        """Increment the played counter after a chunk finishes."""
+        with self._lock:
+            self._played += 1
+
+    def log(self, msg: str) -> None:
+        """Print an event message on its own line, then redraw the status line."""
+        with self._lock:
+            print(f"\r{msg}" + " " * 20)
+            self._render()
+
+    def finish(self) -> None:
+        """Print the final Played N/N status line and move to a new line."""
+        with self._lock:
+            self._render(done=True)
+        print()
+
+    def _render(self, done: bool = False) -> None:
+        """Render the status line. Must be called with self._lock held."""
+        n = self._n
+        icons = []
+        for i in range(n):
+            if not done and i == self._playing_idx:
+                icons.append("▶")
+            elif self._chunk_state[i] is True:
+                icons.append("*")
+            elif self._chunk_state[i] is False:
+                icons.append("!")
+            else:
+                icons.append(" ")
+        bar = "[" + " ".join(icons) + "]"
+        if done:
+            line = f"\r[TTS-Parallel] Received {self._received}/{n} {bar} Played {self._played}/{n}"
+        else:
+            play = self._playing_idx + 1 if self._playing_idx >= 0 else 0
+            line = f"\r[TTS-Parallel] Received {self._received}/{n} {bar} Playing {play}/{n}"
+        print(line + "\033[K", end="", flush=True)
+
+
 class GeminiLiveAPI:
     """Reusable Gemini Live text-to-speech wrapper."""
 
@@ -620,42 +705,12 @@ class GeminiLiveAPI:
         pcm_bytes_per_sec = DEFAULT_SAMPLE_RATE * 2
         min_buffer_pcm = int(min_buffer_seconds * pcm_bytes_per_sec)
 
-        # Chunk state: None=pending, True=ok, False=failed
-        chunk_state: Dict[int, Optional[bool]] = {i: None for i in range(n)}
-        playing_idx = [-1]
-        played_count = [0]
+        status = ParallelTTSStatus(n)
+        status.start(parallelism)
+
         results: Dict[int, Optional[bytes]] = {}
-        lock = threading.Lock()
+        results_lock = threading.Lock()
         done_queue: queue.Queue = queue.Queue()
-        received_count = [0]
-
-        def render_status(done: bool = False) -> None:
-            """Print a single updating status line (call with lock held)."""
-            icons = []
-            for i in range(n):
-                if not done and i == playing_idx[0]:
-                    icons.append("▶")
-                elif chunk_state[i] is True:
-                    icons.append("*")
-                elif chunk_state[i] is False:
-                    icons.append("!")
-                else:
-                    icons.append(" ")
-            bar = "[" + " ".join(icons) + "]"
-            recv = received_count[0]
-            if done:
-                line = f"\r[TTS-Parallel] Received {recv}/{n} {bar} Played {played_count[0]}/{n}"
-            else:
-                play = playing_idx[0] + 1 if playing_idx[0] >= 0 else 0
-                line = f"\r[TTS-Parallel] Received {recv}/{n} {bar} Playing {play}/{n}"
-            print(line + "\033[K", end="", flush=True)
-
-        def log_event(msg: str) -> None:
-            """Print an event on its own line above the status line (call with lock held)."""
-            print(f"\r{msg}" + " " * 20)
-            render_status()
-
-        print(f"[TTS-Parallel] {n} chunks, parallelism={parallelism}")
 
         def synthesize_one(idx: int) -> None:
             wav = None
@@ -671,19 +726,15 @@ class GeminiLiveAPI:
                     if wav:
                         break
                 except Exception as exc:
-                    with lock:
-                        log_event(f"[TTS-Parallel] chunk {idx + 1} attempt {attempt} ERROR: {exc}")
+                    status.log(f"[TTS-Parallel] chunk {idx + 1} attempt {attempt} ERROR: {exc}")
                 if not wav and attempt < max_retries:
-                    with lock:
-                        log_event(f"[TTS-Parallel] chunk {idx + 1} retrying (attempt {attempt + 1}/{max_retries})")
+                    status.log(f"[TTS-Parallel] chunk {idx + 1} retrying (attempt {attempt + 1}/{max_retries})")
                     time.sleep(retry_delay)
-            with lock:
+            with results_lock:
                 results[idx] = wav
-                chunk_state[idx] = wav is not None
-                received_count[0] += 1
-                if not wav:
-                    log_event(f"[TTS-Parallel] chunk {idx + 1} FAILED after {max_retries} attempts")
-                render_status()
+            status.mark_received(idx, wav is not None)
+            if not wav:
+                status.log(f"[TTS-Parallel] chunk {idx + 1} FAILED after {max_retries} attempts")
             done_queue.put(idx)
 
         executor = ThreadPoolExecutor(max_workers=parallelism)
@@ -701,7 +752,7 @@ class GeminiLiveAPI:
 
         while next_idx < n:
             done_queue.get(timeout=120)
-            with lock:
+            with results_lock:
                 while next_idx < n and next_idx in results:
                     chunk = results.pop(next_idx)
                     play_idx = next_idx
@@ -720,16 +771,11 @@ class GeminiLiveAPI:
                 while play_buffer:
                     play_idx, chunk = play_buffer.pop(0)
                     buffer_pcm_bytes -= pcm_size(chunk)
-                    with lock:
-                        playing_idx[0] = play_idx
-                        render_status()
+                    status.mark_playing(play_idx)
                     yield chunk
-                    with lock:
-                        played_count[0] += 1
+                    status.mark_played()
 
-        with lock:
-            render_status(done=True)
-        print()
+        status.finish()
 
     async def astream_parallel_wav(
         self,
@@ -819,15 +865,13 @@ class GeminiLiveAPI:
         pcm_bytes_per_sec = DEFAULT_SAMPLE_RATE * 2
         min_buffer_pcm = int(min_buffer_seconds * pcm_bytes_per_sec)
 
-        print(f"[TTS-parallel/async] {n} chunks, parallelism={parallelism}, min_buffer={min_buffer_seconds}s, min_sentence_chars={min_sentence_chars}")
-        for i, s in enumerate(sentences):
-            print(f"[TTS-parallel/async]   chunk {i + 1}: ({len(s)} chars) {s}")
+        status = ParallelTTSStatus(n)
+        status.start(parallelism)
 
         loop = asyncio.get_event_loop()
         sem = asyncio.Semaphore(parallelism)
         done_queue: asyncio.Queue = asyncio.Queue()
         results: Dict[int, Optional[bytes]] = {}
-        received_count = [0]
 
         async def synthesize_one(idx: int) -> None:
             async with sem:
@@ -846,13 +890,14 @@ class GeminiLiveAPI:
                         if wav:
                             break
                     except Exception as exc:
-                        print(f"[TTS-parallel/async] chunk {idx + 1}/{n} attempt {attempt} ERROR: {exc}")
-                    if attempt < max_retries:
+                        status.log(f"[TTS-Parallel] chunk {idx + 1} attempt {attempt} ERROR: {exc}")
+                    if not wav and attempt < max_retries:
+                        status.log(f"[TTS-Parallel] chunk {idx + 1} retrying (attempt {attempt + 1}/{max_retries})")
                         await asyncio.sleep(retry_delay)
                 results[idx] = wav
-                received_count[0] += 1
-                status = "OK" if wav else f"FAILED (after {max_retries} attempts)"
-                print(f"[TTS-parallel/async] {received_count[0]}/{n} chunks received (chunk {idx + 1} {status})")
+                status.mark_received(idx, wav is not None)
+                if not wav:
+                    status.log(f"[TTS-Parallel] chunk {idx + 1} FAILED after {max_retries} attempts")
                 await done_queue.put(idx)
 
         tasks = [asyncio.create_task(synthesize_one(i)) for i in range(n)]
@@ -879,23 +924,19 @@ class GeminiLiveAPI:
 
                 all_done = (next_idx == n)
 
-                if not yielding_started:
-                    buf_secs = buffer_pcm_bytes / pcm_bytes_per_sec
-                    if buffer_pcm_bytes >= min_buffer_pcm or all_done:
-                        yielding_started = True
-                        print(f"[TTS-parallel/async] buffer ready ({buf_secs:.1f}s), starting playback")
-                    else:
-                        print(f"[TTS-parallel/async] buffering... {buf_secs:.1f}s / {min_buffer_seconds}s")
+                if not yielding_started and (buffer_pcm_bytes >= min_buffer_pcm or all_done):
+                    yielding_started = True
 
                 if yielding_started:
                     while play_buffer:
                         play_idx, chunk = play_buffer.pop(0)
                         buffer_pcm_bytes -= pcm_size(chunk)
-                        print(f"[TTS-parallel/async] yielding chunk {play_idx + 1}/{n}")
+                        status.mark_playing(play_idx)
                         yield chunk
+                        status.mark_played()
         finally:
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-            print(f"[TTS-parallel/async] cancelled remaining tasks")
+            status.finish()
 

@@ -10,6 +10,7 @@ def get_static_content(filename: str) -> str:
 
 from .gemini_live_api import (
     GeminiLiveAPI,
+    ParallelTTSStatus,
     pcm_to_wav_bytes,
     write_wav_file,
     get_character_definitions,
@@ -33,6 +34,7 @@ from .math_eval import (
 __all__ = [
     "get_static_content",
     "GeminiLiveAPI",
+    "ParallelTTSStatus",
     "pcm_to_wav_bytes",
     "write_wav_file",
     "get_character_definitions",

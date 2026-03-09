@@ -10,6 +10,27 @@ concurrently (up to `parallelism` at a time), and yields each sentence as a
 complete WAV chunk in order. The caller receives audio incrementally instead of
 waiting for the entire text to be synthesized.
 
+Progress is displayed via `ParallelTTSStatus` — a reusable, thread-safe class
+that renders a single updating status line:
+
+```
+[TTS-Parallel] Received 4/8 [▶ *   * *] Playing 1/8
+```
+
+Both `stream_parallel_wav` and `astream_parallel_wav` use it internally. You
+can also import and use it directly for your own streaming loops:
+
+```python
+from gemini_live_tools import ParallelTTSStatus
+
+status = ParallelTTSStatus(n=total_chunks)
+status.start(parallelism=4)
+status.mark_received(idx, ok=True)
+status.mark_playing(idx)
+status.mark_played()
+status.finish()
+```
+
 When the client disconnects mid-stream, the generator exits via
 `asyncio.CancelledError`. Any synthesis tasks still queued (waiting on the
 semaphore) are cancelled immediately. In-flight Gemini HTTP calls run to
