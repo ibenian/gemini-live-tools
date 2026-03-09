@@ -51,7 +51,7 @@ git ls-remote --tags https://github.com/ibenian/gemini-live-tools.git | grep -v 
 
 ```python
 from google import genai
-from gemini_live_tools import GeminiLiveAPI
+from gemini_live_tools import GeminiLiveAPI, ParallelTTSStatus
 from gemini_live_tools import safe_eval_math, eval_math_sweep, MATH_NAMES
 
 client = genai.Client(api_key="...")
@@ -68,6 +68,14 @@ for chunk in api.stream_parallel_wav(prepared, parallelism=4, character_name="cr
 # Parallel streaming TTS (async — for FastAPI / aiohttp)
 async for chunk in api.astream_parallel_wav(prepared, parallelism=4, character_name="crisp"):
     yield chunk
+
+# Use ParallelTTSStatus standalone for your own streaming loops
+status = ParallelTTSStatus(n=total_chunks)
+status.start(parallelism=4)
+status.mark_received(idx=0, ok=True)   # updates status line
+status.mark_playing(idx=0)             # shows ▶ on status line
+status.mark_played()
+status.finish()                        # prints final Played N/N line
 
 # Math eval
 result, err = safe_eval_math("norm([3, 4])")   # → 5.0

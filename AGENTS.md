@@ -62,7 +62,7 @@ CONTRIBUTING.md           How to add voice characters
 ## Key API
 
 ```python
-from gemini_live_tools import GeminiLiveAPI
+from gemini_live_tools import GeminiLiveAPI, ParallelTTSStatus
 
 api = GeminiLiveAPI(api_key="...")
 

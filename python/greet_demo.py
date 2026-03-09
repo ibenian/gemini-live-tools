@@ -23,7 +23,7 @@ import subprocess
 from simple_term_menu import TerminalMenu
 from google import genai
 
-from gemini_live_tools import GeminiLiveAPI, CHARACTERS, _split_sentences
+from gemini_live_tools import GeminiLiveAPI, CHARACTERS
 
 
 def pick_character() -> str:
@@ -117,8 +117,6 @@ def main() -> None:
         print("  Playing...\n")
         play_wav(wav)
     else:
-        total = len(_split_sentences(prepared, min_chars=args.min_sentence_chars))
-        print(f"  {total} sentence(s), parallelism={args.parallelism}\n")
         played = 0
         for chunk in api.stream_parallel_wav(
             prepared,
