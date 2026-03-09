@@ -217,6 +217,62 @@ def _split_sentences(text: str, min_chars: int = 80) -> list:
     return merged if merged else [text.strip()]
 
 
+def _friendly_error(exc: Exception) -> str:
+    """Return a short, human-readable error message for common API errors."""
+    msg = str(exc)
+    if "RESOURCE_EXHAUSTED" in msg or "429" in msg:
+        model, limit, retry = None, None, None
+        # google.genai APIError exposes structured .details dict directly
+        details_list = []
+        raw = getattr(exc, 'details', None)
+        if isinstance(raw, dict):
+            details_list = raw.get('error', raw).get('details', [])
+        elif isinstance(raw, list):
+            details_list = raw
+        for detail in details_list:
+            dtype = detail.get('@type', '')
+            if 'QuotaFailure' in dtype:
+                for v in detail.get('violations', []):
+                    dims = v.get('quotaDimensions', {})
+                    model = dims.get('model')
+                    limit = v.get('quotaValue')
+            if 'RetryInfo' in dtype:
+                retry = detail.get('retryDelay')
+        parts = []
+        if model:
+            parts.append(f"model={model}")
+        if limit:
+            parts.append(f"limit={limit}")
+        detail_str = f" ({', '.join(parts)})" if parts else ""
+        retry_str = f", retry in {retry}" if retry else ""
+        return f"quota exceeded{detail_str}{retry_str}"
+    if "RATE_LIMIT" in msg or "rate limit" in msg.lower():
+        return "rate limited"
+    if "timeout" in msg.lower() or "timed out" in msg.lower():
+        return "timeout"
+    if "connection" in msg.lower():
+        return "connection error"
+    return msg[:80]
+
+
+def _error_retry_delay(exc: Exception, default: float) -> Optional[float]:
+    """Return seconds to wait before retrying, or None to skip remaining retries.
+
+    None means the error is unrecoverable in the short term (e.g. daily quota
+    exhausted) so further retries would just waste quota budget.
+    """
+    msg = str(exc)
+    if "RESOURCE_EXHAUSTED" in msg or "429" in msg:
+        return None   # quota exhausted — won't recover for hours, give up
+    if "RATE_LIMIT" in msg or "rate limit" in msg.lower():
+        return 60.0   # per-minute rate limit — wait a full minute
+    if "timeout" in msg.lower() or "timed out" in msg.lower():
+        return 5.0
+    if "connection" in msg.lower():
+        return 5.0
+    return default
+
+
 class ParallelTTSStatus:
     """Thread-safe single-line status display for parallel TTS progress.
 
@@ -244,6 +300,7 @@ class ParallelTTSStatus:
         self._playing_idx = -1
         self._received = 0
         self._played = 0
+        self._message = ""
         self._lock = threading.Lock()
 
     def start(self, parallelism: int) -> None:
@@ -255,6 +312,8 @@ class ParallelTTSStatus:
         with self._lock:
             self._chunk_state[idx] = ok
             self._received += 1
+            if ok:
+                self._message = ""
             self._render()
 
     def mark_playing(self, idx: int) -> None:
@@ -268,15 +327,16 @@ class ParallelTTSStatus:
         with self._lock:
             self._played += 1
 
-    def log(self, msg: str) -> None:
-        """Print an event message on its own line, then redraw the status line."""
+    def set_message(self, msg: str) -> None:
+        """Set an inline message suffix on the status line and redraw."""
         with self._lock:
-            print(f"\r{msg}" + " " * 20)
+            self._message = msg
             self._render()
 
     def finish(self) -> None:
         """Print the final Played N/N status line and move to a new line."""
         with self._lock:
+            self._message = ""
             self._render(done=True)
         print()
 
@@ -299,6 +359,8 @@ class ParallelTTSStatus:
         else:
             play = self._playing_idx + 1 if self._playing_idx >= 0 else 0
             line = f"\r[TTS-Parallel] Received {self._received}/{n} {bar} Playing {play}/{n}"
+        if self._message:
+            line += f" - {self._message}"
         print(line + "\033[K", end="", flush=True)
 
 
@@ -397,7 +459,7 @@ class GeminiLiveAPI:
             )
             return (response.text or "").strip() or text
         except Exception as e:
-            print(f"[TTS] prepare_text failed ({self.prep_model}): {e}")
+            print(f"[TTS] prepare_text failed ({self.prep_model}): {_friendly_error(e)}")
             return text
 
     def _sanitize_for_json(self, obj):
@@ -447,6 +509,7 @@ class GeminiLiveAPI:
         style: Optional[str] = None,
         should_cancel: Optional[Callable[[], bool]] = None,
         pre_cleaned: bool = False,
+        log: Optional[Callable[[str], None]] = None,
     ) -> bool:
         """Generate PCM audio chunks using Gemini TTS (generate_content API)."""
         self.last_error = None
@@ -462,6 +525,7 @@ class GeminiLiveAPI:
                 character_name=character_name,
                 style=style,
                 pre_cleaned=pre_cleaned,
+                log=log,
             )
             if not pcm:
                 self.last_error = "No audio data received from Gemini TTS."
@@ -474,8 +538,8 @@ class GeminiLiveAPI:
                 on_chunk(pcm[idx:idx + chunk_size])
             return True
         except Exception as exc:
-            self.last_error = str(exc)
-            print(f"[GEMINI TTS] stream_tts failed: {exc}")
+            self.last_error = _friendly_error(exc)
+            print(f"[GEMINI TTS] stream_tts failed: {self.last_error}")
             return False
 
     def _clean_for_tts(self, text: str) -> str:
@@ -526,8 +590,10 @@ class GeminiLiveAPI:
         character_name: Optional[str],
         style: Optional[str],
         pre_cleaned: bool = False,
+        log: Optional[Callable[[str], None]] = None,
     ) -> Optional[bytes]:
         """Fallback path using non-live GenerateContent AUDIO."""
+        _log = log or print
         env_models = os.environ.get("GEMINI_TTS_FALLBACK_MODELS", "").strip()
         if env_models:
             models = [m.strip() for m in env_models.split(",") if m.strip()]
@@ -580,19 +646,17 @@ class GeminiLiveAPI:
                                     mime_type = getattr(inline, "mime_type", "") or ""
                                     pcm = self._audio_bytes_to_pcm(inline.data, mime_type)
                                     if not pcm:
-                                        print(
-                                            f"[GEMINI LIVE] fallback {model} attempt {attempt} returned unsupported audio payload mime={mime_type!r}"
-                                        )
+                                        _log(f"[GEMINI LIVE] fallback {model} attempt {attempt} returned unsupported audio payload mime={mime_type!r}")
                                         continue
                                     return pcm
-                        print(f"[GEMINI LIVE] fallback {model} attempt {attempt} returned no audio")
+                        _log(f"[GEMINI LIVE] fallback {model} attempt {attempt} returned no audio")
                     except Exception as model_exc:
-                        print(f"[GEMINI LIVE] fallback {model} attempt {attempt} failed: {model_exc}")
+                        _log(f"[GEMINI LIVE] fallback {model} attempt {attempt} failed: {_friendly_error(model_exc)}")
                         if attempt < max_attempts:
                             time.sleep(min(0.4 * (2 ** (attempt - 1)), 2.0))
             return None
         except Exception as exc:
-            print(f"[GEMINI LIVE] fallback failed: {exc}")
+            _log(f"[GEMINI LIVE] fallback failed: {_friendly_error(exc)}")
             return None
 
     def _audio_bytes_to_pcm(self, data: bytes, mime_type: str) -> Optional[bytes]:
@@ -632,6 +696,7 @@ class GeminiLiveAPI:
         voice_name: Optional[str] = None,
         character_name: Optional[str] = None,
         style: Optional[str] = None,
+        log: Optional[Callable[[str], None]] = None,
     ) -> Optional[bytes]:
         """Generate full PCM payload by streaming and collecting chunks."""
         chunks = []
@@ -641,6 +706,7 @@ class GeminiLiveAPI:
             voice_name=voice_name,
             character_name=character_name,
             style=style,
+            log=log,
         )
         if not ok:
             return None
@@ -653,6 +719,7 @@ class GeminiLiveAPI:
         voice_name: Optional[str] = None,
         character_name: Optional[str] = None,
         style: Optional[str] = None,
+        log: Optional[Callable[[str], None]] = None,
     ) -> Optional[bytes]:
         """Generate WAV bytes."""
         pcm = self.synthesize_pcm(
@@ -660,6 +727,7 @@ class GeminiLiveAPI:
             voice_name=voice_name,
             character_name=character_name,
             style=style,
+            log=log,
         )
         if not pcm:
             return None
@@ -722,19 +790,27 @@ class GeminiLiveAPI:
                         voice_name=voice_name,
                         character_name=character_name,
                         style=style,
+                        log=status.set_message,
                     )
                     if wav:
                         break
                 except Exception as exc:
-                    status.log(f"[TTS-Parallel] chunk {idx + 1} attempt {attempt} ERROR: {exc}")
+                    delay = _error_retry_delay(exc, retry_delay)
+                    err_msg = _friendly_error(exc)
+                    if delay is None or attempt == max_retries:
+                        status.set_message(f"chunk {idx + 1}: {err_msg}")
+                        break
+                    status.set_message(f"chunk {idx + 1}: {err_msg}. Retrying in {delay:.0f}s")
+                    time.sleep(delay)
+                    continue
                 if not wav and attempt < max_retries:
-                    status.log(f"[TTS-Parallel] chunk {idx + 1} retrying (attempt {attempt + 1}/{max_retries})")
+                    status.set_message(f"chunk {idx + 1}: no audio, retrying ({attempt + 1}/{max_retries})")
                     time.sleep(retry_delay)
             with results_lock:
                 results[idx] = wav
             status.mark_received(idx, wav is not None)
             if not wav:
-                status.log(f"[TTS-Parallel] chunk {idx + 1} FAILED after {max_retries} attempts")
+                status.set_message(f"chunk {idx + 1} failed after {max_retries} attempts")
             done_queue.put(idx)
 
         executor = ThreadPoolExecutor(max_workers=parallelism)
@@ -885,19 +961,27 @@ class GeminiLiveAPI:
                                 voice_name=voice_name,
                                 character_name=character_name,
                                 style=style,
+                                log=status.set_message,
                             ),
                         )
                         if wav:
                             break
                     except Exception as exc:
-                        status.log(f"[TTS-Parallel] chunk {idx + 1} attempt {attempt} ERROR: {exc}")
+                        delay = _error_retry_delay(exc, retry_delay)
+                        err_msg = _friendly_error(exc)
+                        if delay is None or attempt == max_retries:
+                            status.set_message(f"chunk {idx + 1}: {err_msg}")
+                            break
+                        status.set_message(f"chunk {idx + 1}: {err_msg}. Retrying in {delay:.0f}s")
+                        await asyncio.sleep(delay)
+                        continue
                     if not wav and attempt < max_retries:
-                        status.log(f"[TTS-Parallel] chunk {idx + 1} retrying (attempt {attempt + 1}/{max_retries})")
+                        status.set_message(f"chunk {idx + 1}: no audio, retrying ({attempt + 1}/{max_retries})")
                         await asyncio.sleep(retry_delay)
                 results[idx] = wav
                 status.mark_received(idx, wav is not None)
                 if not wav:
-                    status.log(f"[TTS-Parallel] chunk {idx + 1} FAILED after {max_retries} attempts")
+                    status.set_message(f"chunk {idx + 1} failed after {max_retries} attempts")
                 await done_queue.put(idx)
 
         tasks = [asyncio.create_task(synthesize_one(i)) for i in range(n)]
