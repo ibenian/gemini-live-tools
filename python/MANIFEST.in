@@ -1,0 +1,1 @@
+recursive-include gemini_live_tools/static *.js

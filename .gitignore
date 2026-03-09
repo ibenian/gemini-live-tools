@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+
+# Override global gitignore to include project-level agent skill definitions
+!.agents/
+!.claude/
+.claude/settings.local.json

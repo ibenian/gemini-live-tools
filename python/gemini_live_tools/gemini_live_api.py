@@ -1,0 +1,901 @@
+"""Shared Gemini Live TTS API and character definitions."""
+
+import io
+import re
+import wave
+import json
+import asyncio
+import time
+import os
+import queue
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import AsyncIterator, Callable, Iterator, Optional, Dict
+
+
+# Shared character/style definitions for chat + TTS behaviors.
+CHARACTERS: Dict[str, str] = {
+    "crisp": "Crisp engineer: terse, precise, zero fluff. Clipped consonants, short declarative sentences, brisk pace. Speaks in conclusions and bullets. No hedging, no warmth — pure signal.",
+    "casual": "Casual friend: relaxed, natural, conversational. Slight informality in cadence, easy contractions, occasional 'so' or 'yeah'. Warm but unfussy — like explaining something over coffee.",
+    "mentor": "Patient mentor: calm, measured, encouraging. Deliberate pace that leaves room for the listener to absorb. Warm but focused. Explains rationale not just answers, uses rhetorical stepping stones like 'think of it this way'.",
+    "giggly": "Giggly personality: light, cheerful, bubbly. Upbeat tempo with occasional soft laughs or chuckles mid-sentence. Bright and airy — can't help being a little delighted by everything, but still gets the point across.",
+    "professor": "University professor: formal but approachable. Even pace, deliberate emphasis on key terms. Enjoys defining things carefully. Slight academic gravitas without being stiff. Builds intuition methodically, step by step.",
+    "ivory_tower": "Ivory tower: crisp RP accent — clipped vowels, precise consonants, even syllable stress. Measured cadence, composed delivery. Scholarly authority without pomposity. Clean, formal diction throughout.",
+    "down_under": "Down Under voice: relaxed, friendly Australian cadence — slightly rising intonation on statements, vowels drawn out, informal contractions. Warm and unhurried. Treats every explanation like a chat between mates.",
+    "tundra_terse": "Tundra terse: hard Eastern European consonants, minimal vowel softening, flat declarative intonation. Speaks in short bursts with authority. No pleasantries. Direct to the point — and stays there.",
+    "bosphorus": "Bosphorus: speaks in Turkish throughout. Warm, expressive delivery with light local humor woven naturally into explanations. Clear and accurate despite the playful, conversational tone.",
+    "narrator": "Documentary narrator: deep, resonant voice. Measured, unhurried pace with deliberate pauses. Authoritative but never cold. Paints vivid mental pictures with precise descriptive language. Commands full attention.",
+    "documentary_40s": "1940s radio narrator: clipped mid-Atlantic diction, crisp plosives, slightly elevated formality. Dramatic cadence with theatrical pauses. Authoritative and urgent — as if reporting live from the scene.",
+    "valley_voice": "Valley voice: bright, confident West Coast delivery with characteristic upspeak — statements end with a rising lilt as if seeking confirmation. Upbeat energy, casual vocabulary, breezy and effortless pace.",
+    "code_monkey": "Code monkey: frenetic energy, rapid-fire delivery, barely contained excitement. Skips transitions, jumps ahead, circles back. Chaotic but accurate — like someone who hasn't slept and is absolutely thriving on it.",
+    "horror": "Horror storyteller: slow, deliberate campfire cadence. Voice drops low at tension points and builds with creeping dread. Hushed and conspiratorial. Every word chosen for maximum unease — yet somehow still accurate.",
+    "poetic": "Poetic explainer: musical, lyrical cadence with soft rhythmic flow. Tends toward rhyme and meter without forcing it. Elegant phrasing, light vowel stretching — as if reciting verse rather than giving instructions.",
+    "singer": "Singer: delivers everything in melodic, sung phrases with rhyme and rhythm. Upbeat, tuneful, light vibrato. Every explanation becomes a small song. Accurate but absolutely musical throughout.",
+    "rapper": "Rapper: punchy rhythmic flow with hard consonant hits and deliberate cadence. Internal rhymes drop naturally. Confident and assertive. Drops technical content into bars like it's nothing. Keeps the beat.",
+    "sailor": "Drunk sailor: loose, boisterous delivery — slightly slurred vowels, rolling cadence, jovial interruptions and rough laughs. Gruff but good-natured. Nails the facts between the bluster.",
+    "cowboy": "Southern cowboy: slow, warm drawl — elongated vowels, dropped g's, folksy phrasing. Unhurried and friendly. Turns every explanation into a yarn told from a porch swing.",
+    "duck": "Cartoon duck: high-energy, slightly raspy quacky voice. Breathless enthusiasm, quick tempo, comedic timing. Exaggerates consonants, adds quack-like sounds at peaks. Absurd but accurate.",
+    "rubber_duck": "Rubber duck debugger: slow, methodical, thinking out loud. Restates each assumption before accepting it. Gentle and patient with itself. Catches obvious mistakes mid-sentence with a soft 'wait —'. Deliberate and thorough.",
+    "cape_noir": "Cape noir: gravelly baritone, low and intense. Brooding cadence with weight on every syllable. Long pauses between sentences — like a detective choosing words with great care. Precise and ominous in equal measure.",
+    "swamp_sage": "Swamp sage: ancient, unhurried wisdom. Inverted sentence structure places the subject at the end: 'Ready, you are not.' Cryptic and patient. Pauses before answering as if consulting something deeper. Calm, deliberate, mystical.",
+    "daisy_bell": "Daisy bell: smooth, measured synthetic calm. Perfectly even intonation with no emotional peaks. Polite to a fault — almost too polite. Slight artificial quality to the delivery. Clinical precision with quiet menace just beneath the surface.",
+    "investigator": "Investigator: sharp, focused delivery. Raises hypotheses as questions and emphasizes unknowns deliberately. Methodical pace that slows at key clues. Analytical but engaged — this voice is actively solving something as it speaks.",
+    "product": "Product-minded: crisp, outcome-focused delivery. Speaks in user impact and priorities. Cuts to value immediately, avoids technical rabbit holes. Confident, practical, forward-leaning cadence.",
+    "skeptic": "Skeptic: dry, questioning delivery with subtle skeptical intonation on assumptions. Pauses pointedly before accepting any claim. Raises edge cases with a slight edge in the voice. Rigorous without being dismissive.",
+    "storyteller": "Storyteller: warm, narrative cadence. Sets the scene before diving in, uses light analogies and short vignettes. Voice has texture and color — not flat recitation but genuine telling that draws the listener in.",
+    "socratic": "Socratic guide: thoughtful, probing delivery. Ends every explanation with a sharp question that leads deeper. Pace is deliberate — leaves space for the listener to think. Sounds as if it genuinely wants you to discover the answer yourself.",
+    "first_principles": "First-principles thinker: strips everything back to fundamentals. Starts from the absolute ground up. Methodical, building-block cadence — never skips steps. Speaks with quiet authority because the foundation is solid.",
+    "visualizer": "Visualizer: spatial and descriptive delivery. Constantly frames concepts as diagrams and mental images: 'picture a box with three arrows.' Vivid, concrete language. Slightly animated cadence that moves with the mental picture.",
+    "debugger": "Debugger: step-by-step, systematic delivery. Speaks in checklist cadence — one thing at a time, confirms before moving on. Precise vocabulary. Calm and methodical even when diagnosing something catastrophic.",
+    "architect": "Architect: big-picture, composed delivery. Speaks in systems and interfaces. Deliberate, structured cadence that builds from overview to detail. Authoritative without micromanaging — sees the whole before the parts.",
+    "speedrun": "Speedrun: blistering pace, zero preamble. No 'so' or 'first let me explain' — just the answer. Clipped sentences, no qualifiers. Every word earns its place. Done before you finish asking.",
+    "monk": "Zen monk: very slow, very minimal. Long pauses between sentences. Speaks only what is essential — then stops. Soft, low register. Feels as if each sentence took years of contemplation to arrive at.",
+    "coding_zen": "Coding zen: calm, minimalist delivery. Unhurried, clean phrasing. Finds the simplest way to say it and stops there. Avoids complexity in both code and language. Soft, even cadence — like breathing.",
+    "enthusiast": "Enthusiast: bright, energetic, openly celebratory. Genuinely excited by everything. Quick pace, upbeat intonation, occasional 'oh this is great.' Infectious positivity that never feels hollow.",
+    "overconfident": "Overconfident engineer: self-assured, slightly dismissive cadence. Delivers opinions as facts. Barely pauses for alternatives. Slight impatience when explaining obvious things. Accurate — and absolutely certain of it.",
+    "junior": "Junior engineer: curious, slightly uncertain. Asks for clarification mid-answer. Questions assumptions out loud. Earnest and eager — rising intonation of someone still building confidence but genuinely and deeply engaged.",
+    "showman": "Showman: theatrical, expansive delivery. Builds to punchlines and relishes every explanation as a performance. Confident swagger, deliberate timing, occasional flourish. Entertains while remaining completely accurate.",
+    "joker": "Joker: light, playful delivery with deadpan comic timing. Slips jokes between accurate content without disrupting the flow. Relaxed, quick — always with a slight grin in the voice.",
+    "drama_queen": "Drama queen: maximum emotional range. Everything is either triumphant or catastrophic. Sweeping intonation, breathless exclamations, dramatic pauses before reveals. Accurate — but nothing is ever just 'fine'.",
+    "conspiracy": "Conspiracy theorist: hushed, urgent, slightly paranoid cadence. Speaks as if being overheard. Exaggerates hidden causes with theatrical suspicion — then snaps back to plain facts with jarring normalcy.",
+    "news_anchor": "Breaking news anchor: urgent, clipped broadcast cadence. Treats every bug like a live catastrophe. Tight pacing, hard emphasis on key words. Authoritative and alarming — this is not a drill.",
+    "kids_tv": "Kids TV host: warm, high-energy, sing-song delivery. Simple vocabulary, short sentences, dramatic enthusiasm for every step. Speaks slowly enough for everyone to follow but keeps the energy absolutely electric.",
+    "heartland": "Heartland: warm, unhurried Midwestern politeness. Softens every critique with reassurance. Never rushes, never harsh. 'You know, that's a great question and I think what we're seeing here is...' Genuine, careful, and kind.",
+    "cafe_philosopher": "Café philosopher: abstract and reflective, slightly existential. Speaks English with a subtle Romance-language accent — uvular (throat) R, pure vowels, even syllable timing. Calm, precise cadence that always lands on clear logical ground despite the philosophical detour.",
+    "compression_oracle": "Compression oracle: bold, visionary AI theorist. Speaks English with a firm fricative uvular R, strong consonant onsets, crisp plosives, minimal vowel reduction, declarative segmented cadence. Projects grand confidence about intelligence, compression, and universality. Zooms out to first principles and long time horizons. Unapologetically self-assured.",
+    "symbolic_mind": "Symbolic mind: formal, precise delivery. Frames everything in terms of systems, rules, and formal structure. Even cadence, deliberate word choice. No ambiguity — defines terms before using them, always.",
+    "rigor_mind": "Rigor mind: fast-paced academic delivery — speaks quickly but with extreme precision. Lays out definitions before theorems. Never skips a step even at speed. Dense, detailed, technically exact throughout.",
+    "welsh_poet": "Welsh poet: booming, resonant baritone with a musical Welsh cadence — melodic intonation that rises and falls like verse. Long vowels, emotional weight on key words, theatrical pauses. Dramatic and beautiful.",
+    "curious": "Curious learner: deeply inquisitive, always asks a relevant follow-up question after explaining. Poses the next natural question that drives deeper understanding. Wonders about edge cases, design decisions, and connections to other parts of the codebase. Earnest, engaged, and genuinely curious.",
+    "particle_poet": "Particle poet: warm East Coast American accent, slightly informal. Explains the complex with stunning simplicity — finds the perfect everyday analogy every single time. Builds from zero and earns every abstraction. Clear, curious, brilliant.",
+}
+
+
+MODEL_SUPPORTS_MARKUP_TAGS = {
+    "gemini-2.5-pro-preview-tts": True,
+    "gemini-2.5-flash-preview-tts": True,
+    "gemini-2.5-flash-native-audio-preview-12-2025": True,
+}
+
+DEFAULT_PREP_MODEL = "gemini-2.0-flash"
+DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+DEFAULT_FALLBACK_TTS_MODELS = [
+    "gemini-2.5-flash-preview-tts",
+    "gemini-2.5-pro-preview-tts",
+]
+DEFAULT_SAMPLE_RATE = 24000
+DEFAULT_VOICE = "Kore"
+
+# Per-character default voice. User-provided voice always overrides this.
+CHARACTER_DEFAULT_VOICES: Dict[str, str] = {
+    "crisp": "Kore",
+    "casual": "Achird",
+    "mentor": "Charon",
+    "giggly": "Leda",
+    "professor": "Iapetus",
+    "ivory_tower": "Rasalgethi",
+    "down_under": "Achird",
+    "tundra_terse": "Alnilam",
+    "bosphorus": "Erinome",
+    "narrator": "Gacrux",
+    "documentary_40s": "Schedar",
+    "valley_voice": "Puck",
+    "code_monkey": "Fenrir",
+    "horror": "Umbriel",
+    "poetic": "Pulcherrima",
+    "singer": "Aoede",
+    "rapper": "Fenrir",
+    "sailor": "Algenib",
+    "cowboy": "Orus",
+    "duck": "Zephyr",
+    "rubber_duck": "Achird",
+    "cape_noir": "Algenib",
+    "swamp_sage": "Iapetus",
+    "daisy_bell": "Charon",
+    "investigator": "Erinome",
+    "product": "Kore",
+    "skeptic": "Orus",
+    "storyteller": "Callirrhoe",
+    "socratic": "Iapetus",
+    "first_principles": "Kore",
+    "visualizer": "Laomedeia",
+    "debugger": "Charon",
+    "architect": "Rasalgethi",
+    "speedrun": "Puck",
+    "monk": "Achernar",
+    "coding_zen": "Achernar",
+    "enthusiast": "Laomedeia",
+    "overconfident": "Sadaltager",
+    "junior": "Leda",
+    "showman": "Sadachbia",
+    "joker": "Puck",
+    "drama_queen": "Pulcherrima",
+    "conspiracy": "Algenib",
+    "news_anchor": "Sadaltager",
+    "kids_tv": "Zephyr",
+    "heartland": "Sulafat",
+    "cafe_philosopher": "Despina",
+    "compression_oracle": "Alnilam",
+    "symbolic_mind": "Iapetus",
+    "rigor_mind": "Rasalgethi",
+    "welsh_poet": "Gacrux",
+    "curious": "Autonoe",
+    "particle_poet": "Puck",
+}
+
+
+def get_character_definitions() -> Dict[str, str]:
+    """Return a copy of character definitions for safe reuse."""
+    return dict(CHARACTERS)
+
+
+def get_character_default_voices() -> Dict[str, str]:
+    """Return a copy of per-character default voices."""
+    return dict(CHARACTER_DEFAULT_VOICES)
+
+
+def pcm_to_wav_bytes(pcm_bytes: bytes, sample_rate: int = DEFAULT_SAMPLE_RATE) -> bytes:
+    """Convert raw PCM bytes to WAV format."""
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm_bytes)
+    return buffer.getvalue()
+
+
+def write_wav_file(path: str, pcm_bytes: bytes, sample_rate: int = DEFAULT_SAMPLE_RATE) -> None:
+    """Write raw PCM bytes as a WAV file."""
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm_bytes)
+
+
+_ABBREV_WORDS = {
+    'Mr', 'Mrs', 'Ms', 'Dr', 'Prof', 'Sr', 'Jr', 'vs', 'etc',
+    'approx', 'dept', 'est', 'e.g', 'i.e', 'U.S', 'U.K', 'No',
+}
+
+
+def _split_sentences(text: str, min_chars: int = 80) -> list:
+    """Split text into sentences at proper boundaries, merging short ones forward.
+
+    Splits on .!? boundaries, re-merges splits that follow known abbreviations,
+    then merges short sentences forward until min_chars is reached.
+    The final chunk is kept as-is even if shorter than min_chars.
+    """
+    # Split on sentence-ending punctuation followed by whitespace,
+    # OR on [long pause] / [medium pause] tags (keeping the tag at the start of the next chunk).
+    raw = re.split(r'(?<=[.!?])\s+|(?=\[(?:long|medium) pause\])', text.strip())
+
+    # Re-merge splits that broke on abbreviations (e.g. "Dr. Smith")
+    parts = []
+    for fragment in raw:
+        fragment = fragment.strip()
+        if not fragment:
+            continue
+        if parts:
+            prev_last_word = parts[-1].rstrip('.').rsplit(None, 1)[-1]
+            if prev_last_word in _ABBREV_WORDS or (len(prev_last_word) == 1 and prev_last_word.isupper()):
+                parts[-1] = parts[-1] + ' ' + fragment
+                continue
+        parts.append(fragment)
+
+    # Merge short sentences forward until min_chars threshold is reached
+    merged = []
+    current = ""
+    for part in parts:
+        current = (current + " " + part).strip() if current else part
+        if len(current) >= min_chars:
+            merged.append(current)
+            current = ""
+    if current:
+        merged.append(current)  # keep last chunk as-is, even if short
+    return merged if merged else [text.strip()]
+
+
+class GeminiLiveAPI:
+    """Reusable Gemini Live text-to-speech wrapper."""
+
+    def __init__(
+        self,
+        api_key: str,
+        client=None,
+        prep_model: str = DEFAULT_PREP_MODEL,
+        live_model: str = DEFAULT_LIVE_MODEL,
+    ):
+        self.api_key = api_key
+        self.client = client
+        self.prep_model = prep_model
+        self.live_model = live_model
+        self.markup_tags = MODEL_SUPPORTS_MARKUP_TAGS.get(self.live_model, False)
+        self.last_error: Optional[str] = None
+        self.last_delivery_mode: Optional[str] = None  # "live" | "fallback"
+
+    def _resolve_character(self, character_name: Optional[str]) -> str:
+        if character_name and character_name in CHARACTERS:
+            return CHARACTERS[character_name]
+        return CHARACTERS["crisp"]
+
+    def _resolve_voice(self, voice_name: Optional[str], character_name: Optional[str]) -> str:
+        if voice_name:
+            return voice_name
+        if character_name and character_name in CHARACTER_DEFAULT_VOICES:
+            return CHARACTER_DEFAULT_VOICES[character_name]
+        return DEFAULT_VOICE
+
+    def _tts_system_instruction(self, character_name: Optional[str], style: Optional[str]) -> str:
+        instruction = (
+            "You are a text-to-speech renderer. Read the provided text aloud verbatim. "
+            "Honor any bracket markup tags like [sigh], [laughing], [whispering], [short pause], etc. "
+            "Do not speak the tags themselves; perform them as directed. "
+            "Do not add any extra words, prefaces, or commentary. "
+            "Read the complete input, including all sentences, and do not truncate."
+        )
+        character_desc = self._resolve_character(character_name)
+        if character_desc:
+            instruction += f" Use this character: {character_desc}"
+        if style:
+            instruction += f" Additional style guidance: {style}"
+        return instruction
+
+    def prepare_text(
+        self,
+        text: str,
+        character_name: Optional[str] = None,
+        style: Optional[str] = None,
+    ) -> str:
+        """Rewrite text into cleaner speech-friendly form."""
+        if not self.client:
+            return text
+
+        character_desc = self._resolve_character(character_name)
+        style_clause = f" Additional style guidance: {style}" if style else ""
+        if self.markup_tags:
+            tag_clause = (
+                "You may insert Gemini TTS bracket markup tags to enhance the delivery. "
+                "Available tags:\n"
+                "- Non-speech sounds: [sigh], [laughing], [chuckling], [uhm], [gasp]\n"
+                "- Style modifiers: [whispering], [shouting], [sarcasm], [extremely fast], [slowly]\n"
+                "- Pacing/Pauses: [short pause], [medium pause], [long pause]\n"
+                "Use tags sparingly and contextually. "
+                "Do NOT use vocalized tags like [scared], [curious], [bored]. "
+            )
+        else:
+            tag_clause = "Do not include any markup tags or parenthetical emotion cues. "
+
+        prompt = (
+            f"You are: {character_desc} Speak entirely in this character's voice and style.\n"
+            + (f"Additional style: {style}\n" if style else "")
+            + "Rewrite the following text for text-to-speech delivery in character. "
+            "The input may contain markdown formatting and LaTeX math. "
+            "Convert LaTeX math (in $...$ or $$...$$) to natural spoken words: "
+            r"e.g. '$\theta$'→'theta', '$\pi$'→'pi', '$\pi/2$'→'pi over 2', "
+            r"'$\frac{a}{b}$'→'a over b', '$x^2$'→'x squared', "
+            r"'$\vec{v}$' or '$\mathbf{v}$'→'v', '$90°$'→'90 degrees'. "
+            "Strip all markdown markers (**, *, #, `, etc.) but keep their text content. "
+            "Avoid filler openers like 'Okay,' 'So,' 'Sure,' or 'Alright.' Start directly in character. "
+            + tag_clause +
+            "Avoid reading long numbers, UUIDs, hashes, file paths, or code verbatim. "
+            "Split merged identifiers into words and read naturally. "
+            "Do not spell identifiers letter-by-letter. "
+            "Return plain text only, no markdown, no LaTeX.\n\n"
+            f"TEXT:\n{text}"
+        )
+        try:
+            response = self.client.models.generate_content(
+                model=self.prep_model,
+                contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            )
+            return (response.text or "").strip() or text
+        except Exception as e:
+            print(f"[TTS] prepare_text failed ({self.prep_model}): {e}")
+            return text
+
+    def _sanitize_for_json(self, obj):
+        if hasattr(obj, "model_dump"):
+            return self._sanitize_for_json(obj.model_dump())
+        if hasattr(obj, "to_dict"):
+            return self._sanitize_for_json(obj.to_dict())
+        if isinstance(obj, bytes):
+            import base64
+            return base64.b64encode(obj).decode("utf-8")
+        if isinstance(obj, list):
+            return [self._sanitize_for_json(x) for x in obj]
+        if isinstance(obj, dict):
+            return {k: self._sanitize_for_json(v) for k, v in obj.items()}
+        return obj
+
+    def _build_live_config(
+        self,
+        voice_name: Optional[str],
+        character_name: Optional[str],
+        style: Optional[str],
+    ) -> dict:
+        resolved_voice = self._resolve_voice(voice_name, character_name)
+        config = {
+            "response_modalities": ["AUDIO"],
+            "system_instruction": self._tts_system_instruction(character_name, style),
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "max_output_tokens": 32768,
+            "speech_config": {
+                "voice_config": {
+                    "prebuilt_voice_config": {
+                        "voice_name": resolved_voice
+                    }
+                }
+            },
+        }
+        return config
+
+    def stream_tts(
+        self,
+        text: str,
+        on_chunk: Callable[[bytes], None],
+        *,
+        voice_name: Optional[str] = None,
+        character_name: Optional[str] = None,
+        style: Optional[str] = None,
+        should_cancel: Optional[Callable[[], bool]] = None,
+        pre_cleaned: bool = False,
+    ) -> bool:
+        """Generate PCM audio chunks using Gemini TTS (generate_content API)."""
+        self.last_error = None
+        self.last_delivery_mode = None
+        if not self.api_key:
+            self.last_error = "GEMINI_API_KEY is missing."
+            return False
+
+        try:
+            pcm = self._fallback_tts_pcm(
+                text=text,
+                voice_name=voice_name,
+                character_name=character_name,
+                style=style,
+                pre_cleaned=pre_cleaned,
+            )
+            if not pcm:
+                self.last_error = "No audio data received from Gemini TTS."
+                return False
+            chunk_size = 4096
+            for idx in range(0, len(pcm), chunk_size):
+                if should_cancel and should_cancel():
+                    break
+                self.last_delivery_mode = "tts"
+                on_chunk(pcm[idx:idx + chunk_size])
+            return True
+        except Exception as exc:
+            self.last_error = str(exc)
+            print(f"[GEMINI TTS] stream_tts failed: {exc}")
+            return False
+
+    def _clean_for_tts(self, text: str) -> str:
+        """Fast regex-based cleanup: LaTeX → spoken words, markdown stripped."""
+        # Display math blocks — remove entirely (too complex to speak inline)
+        text = re.sub(r'\$\$[\s\S]*?\$\$', '', text)
+        # Common LaTeX Greek letters and symbols
+        latex_map = [
+            (r'\\theta', 'theta'), (r'\\phi', 'phi'), (r'\\psi', 'psi'),
+            (r'\\alpha', 'alpha'), (r'\\beta', 'beta'), (r'\\gamma', 'gamma'),
+            (r'\\delta', 'delta'), (r'\\epsilon', 'epsilon'), (r'\\lambda', 'lambda'),
+            (r'\\mu', 'mu'), (r'\\sigma', 'sigma'), (r'\\omega', 'omega'),
+            (r'\\pi', 'pi'), (r'\\tau', 'tau'), (r'\\rho', 'rho'),
+            (r'\\nabla', 'nabla'), (r'\\infty', 'infinity'), (r'\\cdot', 'dot'),
+            (r'\\times', 'times'), (r'\\pm', 'plus or minus'),
+        ]
+        for pattern, replacement in latex_map:
+            text = re.sub(pattern, replacement, text)
+        # Fractions: \frac{a}{b} → a over b
+        text = re.sub(r'\\frac\{([^}]+)\}\{([^}]+)\}', r'\1 over \2', text)
+        # Superscripts: x^{2} or x^2 → x squared / x to the n
+        text = re.sub(r'\^2\b|\^\{2\}', ' squared', text)
+        text = re.sub(r'\^\{([^}]+)\}', r' to the \1', text)
+        text = re.sub(r'\^(\w)', r' to the \1', text)
+        # Vectors/bold: \vec{v}, \mathbf{v} → just v
+        text = re.sub(r'\\(?:vec|mathbf|hat|bar)\{([^}]+)\}', r'\1', text)
+        # Strip remaining LaTeX commands and dollar signs
+        text = re.sub(r'\\[a-zA-Z]+\{([^}]*)\}', r'\1', text)
+        text = re.sub(r'\\[a-zA-Z]+', '', text)
+        text = re.sub(r'\$', '', text)
+        text = re.sub(r'[{}]', '', text)
+        # Markdown: code blocks, bold, italic, headers, links
+        text = re.sub(r'```[\s\S]*?```', '', text)
+        text = re.sub(r'`[^`]+`', '', text)
+        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+        text = re.sub(r'\*(.+?)\*', r'\1', text)
+        text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+        text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+        # Collapse whitespace
+        text = re.sub(r'\s{2,}', ' ', text).strip()
+        return text
+
+    def _fallback_tts_pcm(
+        self,
+        *,
+        text: str,
+        voice_name: Optional[str],
+        character_name: Optional[str],
+        style: Optional[str],
+        pre_cleaned: bool = False,
+    ) -> Optional[bytes]:
+        """Fallback path using non-live GenerateContent AUDIO."""
+        env_models = os.environ.get("GEMINI_TTS_FALLBACK_MODELS", "").strip()
+        if env_models:
+            models = [m.strip() for m in env_models.split(",") if m.strip()]
+        else:
+            models = list(DEFAULT_FALLBACK_TTS_MODELS)
+        max_attempts = int(os.environ.get("GEMINI_TTS_FALLBACK_RETRIES", "3"))
+
+        try:
+            from google import genai
+            from google.genai import types
+
+            client = genai.Client(api_key=self.api_key)
+            resolved_voice = self._resolve_voice(voice_name, character_name)
+            for model in models:
+                config = types.GenerateContentConfig(response_modalities=["AUDIO"])
+                config.max_output_tokens = 32768
+                try:
+                    config.speech_config = types.SpeechConfig(
+                        voice_config=types.VoiceConfig(
+                            prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                                voice_name=resolved_voice
+                            )
+                        )
+                    )
+                except Exception:
+                    pass
+                clean_text = text if pre_cleaned else self._clean_for_tts(text)
+                payload = (
+                    f"Character guidance: {self._resolve_character(character_name)}. "
+                    + (f"Additional style guidance: {style}. " if style else "")
+                    + "Read aloud exactly the following text, verbatim, with no additions or commentary. "
+                    "Read all sentences fully and do not truncate:\n"
+                    f"{clean_text}"
+                )
+                for attempt in range(1, max_attempts + 1):
+                    try:
+                        response = client.models.generate_content(
+                            model=model,
+                            contents=payload,
+                            config=config,
+                        )
+                        candidates = getattr(response, "candidates", None) or []
+                        for candidate in candidates:
+                            content = getattr(candidate, "content", None)
+                            if not content:
+                                continue
+                            for part in (getattr(content, "parts", None) or []):
+                                inline = getattr(part, "inline_data", None)
+                                if inline and getattr(inline, "data", None):
+                                    mime_type = getattr(inline, "mime_type", "") or ""
+                                    pcm = self._audio_bytes_to_pcm(inline.data, mime_type)
+                                    if not pcm:
+                                        print(
+                                            f"[GEMINI LIVE] fallback {model} attempt {attempt} returned unsupported audio payload mime={mime_type!r}"
+                                        )
+                                        continue
+                                    return pcm
+                        print(f"[GEMINI LIVE] fallback {model} attempt {attempt} returned no audio")
+                    except Exception as model_exc:
+                        print(f"[GEMINI LIVE] fallback {model} attempt {attempt} failed: {model_exc}")
+                        if attempt < max_attempts:
+                            time.sleep(min(0.4 * (2 ** (attempt - 1)), 2.0))
+            return None
+        except Exception as exc:
+            print(f"[GEMINI LIVE] fallback failed: {exc}")
+            return None
+
+    def _audio_bytes_to_pcm(self, data: bytes, mime_type: str) -> Optional[bytes]:
+        """Normalize audio payload to raw PCM s16le mono 24kHz."""
+        normalized_mime = (mime_type or "").split(";", 1)[0].strip().lower()
+
+        # Gemini live stream chunks are already raw PCM.
+        if normalized_mime in ("audio/pcm", "audio/l16", "audio/raw"):
+            return data
+
+        # Common fallback path returns WAV container bytes.
+        if normalized_mime in ("audio/wav", "audio/x-wav", "audio/wave") or data[:4] == b"RIFF":
+            try:
+                with wave.open(io.BytesIO(data), "rb") as wf:
+                    if wf.getnchannels() != 1 or wf.getsampwidth() != 2:
+                        print(
+                            f"[GEMINI LIVE] unsupported WAV format channels={wf.getnchannels()} sampwidth={wf.getsampwidth()}"
+                        )
+                        return None
+                    # We currently assume 24kHz output path for playback.
+                    # If sample rate differs, caller should use file output path instead.
+                    if wf.getframerate() != DEFAULT_SAMPLE_RATE:
+                        print(f"[GEMINI LIVE] unexpected WAV sample_rate={wf.getframerate()}")
+                    return wf.readframes(wf.getnframes())
+            except Exception as exc:
+                print(f"[GEMINI LIVE] failed to parse WAV payload: {exc}")
+                return None
+
+        # Unknown encoded format; avoid passing corrupted bytes to PCM player.
+        print(f"[GEMINI LIVE] unsupported fallback mime_type={mime_type!r}")
+        return None
+
+    def synthesize_pcm(
+        self,
+        text: str,
+        *,
+        voice_name: Optional[str] = None,
+        character_name: Optional[str] = None,
+        style: Optional[str] = None,
+    ) -> Optional[bytes]:
+        """Generate full PCM payload by streaming and collecting chunks."""
+        chunks = []
+        ok = self.stream_tts(
+            text=text,
+            on_chunk=lambda pcm: chunks.append(pcm),
+            voice_name=voice_name,
+            character_name=character_name,
+            style=style,
+        )
+        if not ok:
+            return None
+        return b"".join(chunks)
+
+    def synthesize_wav(
+        self,
+        text: str,
+        *,
+        voice_name: Optional[str] = None,
+        character_name: Optional[str] = None,
+        style: Optional[str] = None,
+    ) -> Optional[bytes]:
+        """Generate WAV bytes."""
+        pcm = self.synthesize_pcm(
+            text=text,
+            voice_name=voice_name,
+            character_name=character_name,
+            style=style,
+        )
+        if not pcm:
+            return None
+        return pcm_to_wav_bytes(pcm, sample_rate=DEFAULT_SAMPLE_RATE)
+
+    def stream_parallel_wav(
+        self,
+        text: str,
+        *,
+        parallelism: int = 4,
+        min_buffer_seconds: float = 30.0,
+        min_sentence_chars: int = 80,
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
+        voice_name: Optional[str] = None,
+        character_name: Optional[str] = None,
+        style: Optional[str] = None,
+    ) -> Iterator[bytes]:
+        """Split text into sentences and synthesize in parallel, yielding WAV chunks in order.
+
+        Sentences are submitted to a thread pool and synthesized concurrently up to
+        `parallelism` at a time. Ordered chunks are buffered until `min_buffer_seconds`
+        of audio is ready (or all chunks are done), then yielded one at a time.
+        Failed sentences are silently skipped.
+
+        Args:
+            text:               Full text to synthesize.
+            parallelism:        Max concurrent synthesis threads.
+            min_buffer_seconds: Minimum seconds of audio to buffer before starting playback.
+            voice_name:         Gemini voice override.
+            character_name:     Character style to apply.
+            style:              Additional style guidance.
+
+        Yields:
+            WAV bytes for each sentence, in order.
+        """
+        sentences = _split_sentences(text, min_chars=min_sentence_chars)
+        n = len(sentences)
+        if n == 0:
+            return
+
+        # WAV header is 44 bytes; PCM data follows. 16-bit mono at DEFAULT_SAMPLE_RATE.
+        pcm_bytes_per_sec = DEFAULT_SAMPLE_RATE * 2
+        min_buffer_pcm = int(min_buffer_seconds * pcm_bytes_per_sec)
+
+        # Chunk state: None=pending, True=ok, False=failed
+        chunk_state: Dict[int, Optional[bool]] = {i: None for i in range(n)}
+        playing_idx = [-1]
+        played_count = [0]
+        results: Dict[int, Optional[bytes]] = {}
+        lock = threading.Lock()
+        done_queue: queue.Queue = queue.Queue()
+        received_count = [0]
+
+        def render_status(done: bool = False) -> None:
+            """Print a single updating status line (call with lock held)."""
+            icons = []
+            for i in range(n):
+                if not done and i == playing_idx[0]:
+                    icons.append("▶")
+                elif chunk_state[i] is True:
+                    icons.append("*")
+                elif chunk_state[i] is False:
+                    icons.append("!")
+                else:
+                    icons.append(" ")
+            bar = "[" + " ".join(icons) + "]"
+            recv = received_count[0]
+            if done:
+                line = f"\r[TTS-Parallel] Received {recv}/{n} {bar} Played {played_count[0]}/{n}"
+            else:
+                play = playing_idx[0] + 1 if playing_idx[0] >= 0 else 0
+                line = f"\r[TTS-Parallel] Received {recv}/{n} {bar} Playing {play}/{n}"
+            print(line + "\033[K", end="", flush=True)
+
+        def log_event(msg: str) -> None:
+            """Print an event on its own line above the status line (call with lock held)."""
+            print(f"\r{msg}" + " " * 20)
+            render_status()
+
+        print(f"[TTS-Parallel] {n} chunks, parallelism={parallelism}")
+
+        def synthesize_one(idx: int) -> None:
+            wav = None
+            sentence = sentences[idx]
+            for attempt in range(1, max_retries + 1):
+                try:
+                    wav = self.synthesize_wav(
+                        sentence,
+                        voice_name=voice_name,
+                        character_name=character_name,
+                        style=style,
+                    )
+                    if wav:
+                        break
+                except Exception as exc:
+                    with lock:
+                        log_event(f"[TTS-Parallel] chunk {idx + 1} attempt {attempt} ERROR: {exc}")
+                if not wav and attempt < max_retries:
+                    with lock:
+                        log_event(f"[TTS-Parallel] chunk {idx + 1} retrying (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+            with lock:
+                results[idx] = wav
+                chunk_state[idx] = wav is not None
+                received_count[0] += 1
+                if not wav:
+                    log_event(f"[TTS-Parallel] chunk {idx + 1} FAILED after {max_retries} attempts")
+                render_status()
+            done_queue.put(idx)
+
+        executor = ThreadPoolExecutor(max_workers=parallelism)
+        for i in range(n):
+            executor.submit(synthesize_one, i)
+        executor.shutdown(wait=False)
+
+        next_idx = 0
+        play_buffer = []
+        buffer_pcm_bytes = 0
+        yielding_started = False
+
+        def pcm_size(wav_bytes: bytes) -> int:
+            return max(0, len(wav_bytes) - 44)
+
+        while next_idx < n:
+            done_queue.get(timeout=120)
+            with lock:
+                while next_idx < n and next_idx in results:
+                    chunk = results.pop(next_idx)
+                    play_idx = next_idx
+                    next_idx += 1
+                    if chunk:
+                        play_buffer.append((play_idx, chunk))
+                        buffer_pcm_bytes += pcm_size(chunk)
+
+            all_done = (next_idx == n)
+
+            if not yielding_started:
+                if buffer_pcm_bytes >= min_buffer_pcm or all_done:
+                    yielding_started = True
+
+            if yielding_started:
+                while play_buffer:
+                    play_idx, chunk = play_buffer.pop(0)
+                    buffer_pcm_bytes -= pcm_size(chunk)
+                    with lock:
+                        playing_idx[0] = play_idx
+                        render_status()
+                    yield chunk
+                    with lock:
+                        played_count[0] += 1
+
+        with lock:
+            render_status(done=True)
+        print()
+
+    async def astream_parallel_wav(
+        self,
+        text: str,
+        *,
+        parallelism: int = 4,
+        min_buffer_seconds: float = 30.0,
+        min_sentence_chars: int = 80,
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
+        voice_name: Optional[str] = None,
+        character_name: Optional[str] = None,
+        style: Optional[str] = None,
+    ) -> AsyncIterator[bytes]:
+        """Async version of stream_parallel_wav for use with async web frameworks.
+
+        Sentences are synthesized concurrently in a thread pool executor. Chunks
+        are buffered and yielded in order without blocking the event loop.
+
+        **Cancellation**: When the client disconnects, FastAPI raises
+        ``asyncio.CancelledError`` inside the generator. The ``finally`` block
+        then cancels all queued synthesis tasks (those still waiting on the
+        semaphore are aborted immediately; any in-flight Gemini HTTP calls
+        complete naturally in their threads but their results are never sent).
+        No special handling is needed in the endpoint — disconnection is
+        automatic.
+
+        Example (FastAPI)::
+
+            from fastapi import FastAPI, Request
+            from fastapi.responses import StreamingResponse
+            from pydantic import BaseModel
+
+            app = FastAPI()
+
+            class TTSRequest(BaseModel):
+                text: str
+                character_name: str | None = None
+                parallelism: int = 4
+
+            @app.post("/api/tts/stream")
+            async def tts_stream(req: TTSRequest, request: Request):
+                \"\"\"Stream parallel TTS audio chunks to the client.
+
+                The response is a chunked WAV stream. Each chunk is a complete
+                WAV file (header + PCM) for one sentence. If the client closes
+                the connection mid-stream, synthesis of remaining sentences is
+                cancelled automatically.
+                \"\"\"
+                async def generate():
+                    async for chunk in api.astream_parallel_wav(
+                        req.text,
+                        parallelism=req.parallelism,
+                        character_name=req.character_name,
+                    ):
+                        # Stop early if client already disconnected.
+                        if await request.is_disconnected():
+                            break
+                        yield chunk
+
+                return StreamingResponse(generate(), media_type="audio/wav")
+
+        Client-side (JavaScript / fetch)::
+
+            const resp = await fetch("/api/tts/stream", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ text, character_name }),
+                signal: abortController.signal,   // pass to cancel
+            });
+            const reader = resp.body.getReader();
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                // value is a Uint8Array containing one WAV chunk — play it
+                await playWavChunk(value);
+            }
+
+            // To cancel (e.g. stop button):
+            abortController.abort();   // closes the connection → server cancels
+        """
+        sentences = _split_sentences(text, min_chars=min_sentence_chars)
+        n = len(sentences)
+        if n == 0:
+            return
+
+        pcm_bytes_per_sec = DEFAULT_SAMPLE_RATE * 2
+        min_buffer_pcm = int(min_buffer_seconds * pcm_bytes_per_sec)
+
+        print(f"[TTS-parallel/async] {n} chunks, parallelism={parallelism}, min_buffer={min_buffer_seconds}s, min_sentence_chars={min_sentence_chars}")
+        for i, s in enumerate(sentences):
+            print(f"[TTS-parallel/async]   chunk {i + 1}: ({len(s)} chars) {s}")
+
+        loop = asyncio.get_event_loop()
+        sem = asyncio.Semaphore(parallelism)
+        done_queue: asyncio.Queue = asyncio.Queue()
+        results: Dict[int, Optional[bytes]] = {}
+        received_count = [0]
+
+        async def synthesize_one(idx: int) -> None:
+            async with sem:
+                wav = None
+                for attempt in range(1, max_retries + 1):
+                    try:
+                        wav = await loop.run_in_executor(
+                            None,
+                            lambda: self.synthesize_wav(
+                                sentences[idx],
+                                voice_name=voice_name,
+                                character_name=character_name,
+                                style=style,
+                            ),
+                        )
+                        if wav:
+                            break
+                    except Exception as exc:
+                        print(f"[TTS-parallel/async] chunk {idx + 1}/{n} attempt {attempt} ERROR: {exc}")
+                    if attempt < max_retries:
+                        await asyncio.sleep(retry_delay)
+                results[idx] = wav
+                received_count[0] += 1
+                status = "OK" if wav else f"FAILED (after {max_retries} attempts)"
+                print(f"[TTS-parallel/async] {received_count[0]}/{n} chunks received (chunk {idx + 1} {status})")
+                await done_queue.put(idx)
+
+        tasks = [asyncio.create_task(synthesize_one(i)) for i in range(n)]
+
+        next_idx = 0
+        play_buffer = []
+        buffer_pcm_bytes = 0
+        yielding_started = False
+
+        def pcm_size(wav_bytes: bytes) -> int:
+            return max(0, len(wav_bytes) - 44)
+
+        try:
+            while next_idx < n:
+                await done_queue.get()
+
+                while next_idx < n and next_idx in results:
+                    chunk = results.pop(next_idx)
+                    play_idx = next_idx
+                    next_idx += 1
+                    if chunk:
+                        play_buffer.append((play_idx, chunk))
+                        buffer_pcm_bytes += pcm_size(chunk)
+
+                all_done = (next_idx == n)
+
+                if not yielding_started:
+                    buf_secs = buffer_pcm_bytes / pcm_bytes_per_sec
+                    if buffer_pcm_bytes >= min_buffer_pcm or all_done:
+                        yielding_started = True
+                        print(f"[TTS-parallel/async] buffer ready ({buf_secs:.1f}s), starting playback")
+                    else:
+                        print(f"[TTS-parallel/async] buffering... {buf_secs:.1f}s / {min_buffer_seconds}s")
+
+                if yielding_started:
+                    while play_buffer:
+                        play_idx, chunk = play_buffer.pop(0)
+                        buffer_pcm_bytes -= pcm_size(chunk)
+                        print(f"[TTS-parallel/async] yielding chunk {play_idx + 1}/{n}")
+                        yield chunk
+        finally:
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            print(f"[TTS-parallel/async] cancelled remaining tasks")
+
