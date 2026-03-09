@@ -10,6 +10,40 @@ concurrently (up to `parallelism` at a time), and yields each sentence as a
 complete WAV chunk in order. The caller receives audio incrementally instead of
 waiting for the entire text to be synthesized.
 
+### Chunk sizing strategy
+
+Chunks are sized with a growing minimum-character threshold controlled by
+`min_sentence_chars` and `min_sentence_chars_growth`:
+
+```
+chunk 0 threshold: min_sentence_chars
+chunk 1 threshold: min_sentence_chars × growth
+chunk 2 threshold: min_sentence_chars × growth²
+…
+```
+
+With the default `growth=2.0`, each chunk is at least twice as long as the
+previous one. This serves two goals:
+
+**Latency**: Chunk N+1 takes longer to synthesize than chunk N, but chunk N's
+synthesis finishes before chunk N-1 finishes playing. By the time the listener
+hears chunk 0, chunks 1 and 2 are already done — playback is seamless with no
+gaps.
+
+**Quota efficiency**: Fewer, larger API calls cover the same total text.
+Instead of one call per sentence, you make roughly log₂(total_chars /
+min_sentence_chars) calls. This keeps requests-per-minute consumption low,
+which matters when synthesizing long texts under quota limits.
+
+The last chunk is merged into the previous one if it is smaller than 50% of it.
+This prevents a short straggler from becoming a bottleneck at the end and
+ensures chunk sizes grow monotonically.
+
+Example output with `min_sentence_chars=20, growth=2`:
+```
+[TTS-Parallel] 5 chunks (18, 43, 91, 188, 203), parallelism=4
+```
+
 Progress is displayed via `ParallelTTSStatus` — a reusable, thread-safe class
 that renders a single updating status line:
 
@@ -156,7 +190,8 @@ finally block in astream_parallel_wav:
 |---|---|---|
 | `parallelism` | `4` | Max concurrent Gemini TTS calls |
 | `min_buffer_seconds` | `30.0` | Seconds of audio to buffer before first yield |
-| `min_sentence_chars` | `80` | Merge short sentences until this length |
+| `min_sentence_chars` | `80` | Minimum characters for the first chunk |
+| `min_sentence_chars_growth` | `2.0` | Multiply threshold by this factor each chunk (`1.0` = no growth) |
 | `max_retries` | `3` | Retry attempts per sentence on failure |
 | `retry_delay` | `1.0` | Seconds between retries |
 | `voice_name` | `None` | Gemini voice override |

@@ -83,6 +83,10 @@ def main() -> None:
         "--min-buffer-seconds", type=float, default=30.0,
         help="Seconds of audio to buffer before playback starts (default 30)",
     )
+    parser.add_argument(
+        "--min-sentence-chars-growth", type=float, default=2.0,
+        help="Multiply min-sentence-chars by this factor for each successive chunk (default 2.0, 1.0 = no growth)",
+    )
     args = parser.parse_args()
 
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -122,6 +126,7 @@ def main() -> None:
             prepared,
             parallelism=args.parallelism,
             min_sentence_chars=args.min_sentence_chars,
+            min_sentence_chars_growth=args.min_sentence_chars_growth,
             min_buffer_seconds=args.min_buffer_seconds,
             character_name=character,
         ):

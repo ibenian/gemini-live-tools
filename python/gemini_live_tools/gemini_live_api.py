@@ -180,12 +180,18 @@ _ABBREV_WORDS = {
 }
 
 
-def _split_sentences(text: str, min_chars: int = 80) -> list:
+def _split_sentences(text: str, min_chars: int = 80, growth: float = 1.0) -> list:
     """Split text into sentences at proper boundaries, merging short ones forward.
 
     Splits on .!? boundaries, re-merges splits that follow known abbreviations,
-    then merges short sentences forward until min_chars is reached.
-    The final chunk is kept as-is even if shorter than min_chars.
+    then merges short sentences forward until the per-chunk threshold is reached.
+    The final chunk is kept as-is even if shorter than its threshold.
+
+    Args:
+        text:      Text to split.
+        min_chars: Minimum characters for the first chunk.
+        growth:    Multiply threshold by this factor for each successive chunk.
+                   1.0 = fixed threshold, 2.0 = doubles each chunk.
     """
     # Split on sentence-ending punctuation followed by whitespace,
     # OR on [long pause] / [medium pause] tags (keeping the tag at the start of the next chunk).
@@ -204,16 +210,21 @@ def _split_sentences(text: str, min_chars: int = 80) -> list:
                 continue
         parts.append(fragment)
 
-    # Merge short sentences forward until min_chars threshold is reached
+    # Merge short sentences forward using a growing threshold per chunk
     merged = []
     current = ""
     for part in parts:
         current = (current + " " + part).strip() if current else part
-        if len(current) >= min_chars:
+        threshold = int(min_chars * (growth ** len(merged)))
+        if len(current) >= threshold:
             merged.append(current)
             current = ""
     if current:
-        merged.append(current)  # keep last chunk as-is, even if short
+        # If the last chunk is smaller than 50% of the previous chunk, merge them
+        if merged and len(current) < len(merged[-1]) * 0.5:
+            merged[-1] = merged[-1] + " " + current
+        else:
+            merged.append(current)
     return merged if merged else [text.strip()]
 
 
@@ -303,9 +314,14 @@ class ParallelTTSStatus:
         self._message = ""
         self._lock = threading.Lock()
 
-    def start(self, parallelism: int) -> None:
+    def start(self, parallelism: int, sizes: Optional[list] = None) -> None:
         """Print the initial header line."""
-        print(f"[TTS-Parallel] {self._n} chunks, parallelism={parallelism}")
+        if sizes:
+            size_str = ", ".join(str(s) for s in sizes)
+            chunks_info = f"{self._n} chunks ({size_str})"
+        else:
+            chunks_info = f"{self._n} chunks"
+        print(f"[TTS-Parallel] {chunks_info}, parallelism={parallelism}")
 
     def mark_received(self, idx: int, ok: bool) -> None:
         """Record that chunk `idx` has been synthesized (ok=True) or failed (ok=False)."""
@@ -740,6 +756,7 @@ class GeminiLiveAPI:
         parallelism: int = 4,
         min_buffer_seconds: float = 30.0,
         min_sentence_chars: int = 80,
+        min_sentence_chars_growth: float = 2.0,
         max_retries: int = 3,
         retry_delay: float = 1.0,
         voice_name: Optional[str] = None,
@@ -764,7 +781,7 @@ class GeminiLiveAPI:
         Yields:
             WAV bytes for each sentence, in order.
         """
-        sentences = _split_sentences(text, min_chars=min_sentence_chars)
+        sentences = _split_sentences(text, min_chars=min_sentence_chars, growth=min_sentence_chars_growth)
         n = len(sentences)
         if n == 0:
             return
@@ -774,7 +791,7 @@ class GeminiLiveAPI:
         min_buffer_pcm = int(min_buffer_seconds * pcm_bytes_per_sec)
 
         status = ParallelTTSStatus(n)
-        status.start(parallelism)
+        status.start(parallelism, sizes=[len(s) for s in sentences])
 
         results: Dict[int, Optional[bytes]] = {}
         results_lock = threading.Lock()
@@ -860,6 +877,7 @@ class GeminiLiveAPI:
         parallelism: int = 4,
         min_buffer_seconds: float = 30.0,
         min_sentence_chars: int = 80,
+        min_sentence_chars_growth: float = 2.0,
         max_retries: int = 3,
         retry_delay: float = 1.0,
         voice_name: Optional[str] = None,
@@ -933,7 +951,7 @@ class GeminiLiveAPI:
             // To cancel (e.g. stop button):
             abortController.abort();   // closes the connection → server cancels
         """
-        sentences = _split_sentences(text, min_chars=min_sentence_chars)
+        sentences = _split_sentences(text, min_chars=min_sentence_chars, growth=min_sentence_chars_growth)
         n = len(sentences)
         if n == 0:
             return
@@ -942,7 +960,7 @@ class GeminiLiveAPI:
         min_buffer_pcm = int(min_buffer_seconds * pcm_bytes_per_sec)
 
         status = ParallelTTSStatus(n)
-        status.start(parallelism)
+        status.start(parallelism, sizes=[len(s) for s in sentences])
 
         loop = asyncio.get_event_loop()
         sem = asyncio.Semaphore(parallelism)
