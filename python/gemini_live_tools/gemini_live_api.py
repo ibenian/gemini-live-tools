@@ -9,7 +9,6 @@ import time
 import os
 import queue
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from typing import AsyncIterator, Callable, Iterator, Optional, Dict
 
 
@@ -180,12 +179,18 @@ _ABBREV_WORDS = {
 }
 
 
-def _split_sentences(text: str, min_chars: int = 80) -> list:
+def _split_sentences(text: str, min_chars: int = 80, growth: float = 1.0) -> list:
     """Split text into sentences at proper boundaries, merging short ones forward.
 
     Splits on .!? boundaries, re-merges splits that follow known abbreviations,
-    then merges short sentences forward until min_chars is reached.
-    The final chunk is kept as-is even if shorter than min_chars.
+    then merges short sentences forward until the per-chunk threshold is reached.
+    The final chunk is kept as-is even if shorter than its threshold.
+
+    Args:
+        text:      Text to split.
+        min_chars: Minimum characters for the first chunk.
+        growth:    Multiply threshold by this factor for each successive chunk.
+                   1.0 = fixed threshold, 2.0 = doubles each chunk.
     """
     # Split on sentence-ending punctuation followed by whitespace,
     # OR on [long pause] / [medium pause] tags (keeping the tag at the start of the next chunk).
@@ -204,16 +209,21 @@ def _split_sentences(text: str, min_chars: int = 80) -> list:
                 continue
         parts.append(fragment)
 
-    # Merge short sentences forward until min_chars threshold is reached
+    # Merge short sentences forward using a growing threshold per chunk
     merged = []
     current = ""
     for part in parts:
         current = (current + " " + part).strip() if current else part
-        if len(current) >= min_chars:
+        threshold = int(min_chars * (growth ** len(merged)))
+        if len(current) >= threshold:
             merged.append(current)
             current = ""
     if current:
-        merged.append(current)  # keep last chunk as-is, even if short
+        # If the last chunk is smaller than 50% of the previous chunk, merge them
+        if merged and len(current) < len(merged[-1]) * 0.5:
+            merged[-1] = merged[-1] + " " + current
+        else:
+            merged.append(current)
     return merged if merged else [text.strip()]
 
 
@@ -248,6 +258,8 @@ def _friendly_error(exc: Exception) -> str:
         return f"quota exceeded{detail_str}{retry_str}"
     if "RATE_LIMIT" in msg or "rate limit" in msg.lower():
         return "rate limited"
+    if "500" in msg or "INTERNAL" in msg:
+        return "internal server error"
     if "timeout" in msg.lower() or "timed out" in msg.lower():
         return "timeout"
     if "connection" in msg.lower():
@@ -303,9 +315,14 @@ class ParallelTTSStatus:
         self._message = ""
         self._lock = threading.Lock()
 
-    def start(self, parallelism: int) -> None:
+    def start(self, parallelism: int, sizes: Optional[list] = None) -> None:
         """Print the initial header line."""
-        print(f"[TTS-Parallel] {self._n} chunks, parallelism={parallelism}")
+        if sizes:
+            size_str = ", ".join(str(s) for s in sizes)
+            chunks_info = f"{self._n} chunks ({size_str})"
+        else:
+            chunks_info = f"{self._n} chunks"
+        print(f"[TTS-Parallel] {chunks_info}, parallelism={parallelism}")
 
     def mark_received(self, idx: int, ok: bool) -> None:
         """Record that chunk `idx` has been synthesized (ok=True) or failed (ok=False)."""
@@ -325,7 +342,9 @@ class ParallelTTSStatus:
     def mark_played(self) -> None:
         """Increment the played counter after a chunk finishes."""
         with self._lock:
+            self._playing_idx = -1
             self._played += 1
+            self._render()
 
     def set_message(self, msg: str) -> None:
         """Set an inline message suffix on the status line and redraw."""
@@ -336,7 +355,6 @@ class ParallelTTSStatus:
     def finish(self) -> None:
         """Print the final Played N/N status line and move to a new line."""
         with self._lock:
-            self._message = ""
             self._render(done=True)
         print()
 
@@ -610,6 +628,7 @@ class GeminiLiveAPI:
             for model in models:
                 config = types.GenerateContentConfig(response_modalities=["AUDIO"])
                 config.max_output_tokens = 32768
+                config.http_options = types.HttpOptions(timeout=30_000)  # 30s
                 try:
                     config.speech_config = types.SpeechConfig(
                         voice_config=types.VoiceConfig(
@@ -646,17 +665,17 @@ class GeminiLiveAPI:
                                     mime_type = getattr(inline, "mime_type", "") or ""
                                     pcm = self._audio_bytes_to_pcm(inline.data, mime_type)
                                     if not pcm:
-                                        _log(f"[GEMINI LIVE] fallback {model} attempt {attempt} returned unsupported audio payload mime={mime_type!r}")
+                                        _log(f"fallback {model} unsupported mime={mime_type!r}")
                                         continue
                                     return pcm
-                        _log(f"[GEMINI LIVE] fallback {model} attempt {attempt} returned no audio")
+                        _log(f"fallback {model} attempt {attempt}: no audio")
                     except Exception as model_exc:
-                        _log(f"[GEMINI LIVE] fallback {model} attempt {attempt} failed: {_friendly_error(model_exc)}")
+                        _log(f"fallback {model} attempt {attempt}: {_friendly_error(model_exc)}")
                         if attempt < max_attempts:
                             time.sleep(min(0.4 * (2 ** (attempt - 1)), 2.0))
             return None
         except Exception as exc:
-            _log(f"[GEMINI LIVE] fallback failed: {_friendly_error(exc)}")
+            _log(f"fallback failed: {_friendly_error(exc)}")
             return None
 
     def _audio_bytes_to_pcm(self, data: bytes, mime_type: str) -> Optional[bytes]:
@@ -740,6 +759,8 @@ class GeminiLiveAPI:
         parallelism: int = 4,
         min_buffer_seconds: float = 30.0,
         min_sentence_chars: int = 80,
+        min_sentence_chars_growth: float = 2.0,
+        chunk_timeout: float = 2.0,
         max_retries: int = 3,
         retry_delay: float = 1.0,
         voice_name: Optional[str] = None,
@@ -764,70 +785,98 @@ class GeminiLiveAPI:
         Yields:
             WAV bytes for each sentence, in order.
         """
-        sentences = _split_sentences(text, min_chars=min_sentence_chars)
+        sentences = _split_sentences(text, min_chars=min_sentence_chars, growth=min_sentence_chars_growth)
         n = len(sentences)
         if n == 0:
             return
 
         # WAV header is 44 bytes; PCM data follows. 16-bit mono at DEFAULT_SAMPLE_RATE.
-        pcm_bytes_per_sec = DEFAULT_SAMPLE_RATE * 2
-        min_buffer_pcm = int(min_buffer_seconds * pcm_bytes_per_sec)
 
         status = ParallelTTSStatus(n)
-        status.start(parallelism)
+        status.start(parallelism, sizes=[len(s) for s in sentences])
 
         results: Dict[int, Optional[bytes]] = {}
         results_lock = threading.Lock()
         done_queue: queue.Queue = queue.Queue()
-
-        def synthesize_one(idx: int) -> None:
-            wav = None
-            sentence = sentences[idx]
-            for attempt in range(1, max_retries + 1):
-                try:
-                    wav = self.synthesize_wav(
-                        sentence,
-                        voice_name=voice_name,
-                        character_name=character_name,
-                        style=style,
-                        log=status.set_message,
-                    )
-                    if wav:
-                        break
-                except Exception as exc:
-                    delay = _error_retry_delay(exc, retry_delay)
-                    err_msg = _friendly_error(exc)
-                    if delay is None or attempt == max_retries:
-                        status.set_message(f"chunk {idx + 1}: {err_msg}")
-                        break
-                    status.set_message(f"chunk {idx + 1}: {err_msg}. Retrying in {delay:.0f}s")
-                    time.sleep(delay)
-                    continue
-                if not wav and attempt < max_retries:
-                    status.set_message(f"chunk {idx + 1}: no audio, retrying ({attempt + 1}/{max_retries})")
-                    time.sleep(retry_delay)
-            with results_lock:
-                results[idx] = wav
-            status.mark_received(idx, wav is not None)
-            if not wav:
-                status.set_message(f"chunk {idx + 1} failed after {max_retries} attempts")
-            done_queue.put(idx)
-
-        executor = ThreadPoolExecutor(max_workers=parallelism)
+        work_queue: queue.Queue = queue.Queue()
         for i in range(n):
-            executor.submit(synthesize_one, i)
-        executor.shutdown(wait=False)
+            work_queue.put(i)
+
+        def worker() -> None:
+            while True:
+                try:
+                    idx = work_queue.get_nowait()
+                except queue.Empty:
+                    return
+                wav = None
+                try:
+                    sentence = sentences[idx]
+                    for attempt in range(1, max_retries + 1):
+                        try:
+                            wav = self.synthesize_wav(
+                                sentence,
+                                voice_name=voice_name,
+                                character_name=character_name,
+                                style=style,
+                                log=status.set_message,
+                            )
+                            if wav:
+                                break
+                        except Exception as exc:
+                            delay = _error_retry_delay(exc, retry_delay)
+                            err_msg = _friendly_error(exc)
+                            if delay is None or attempt == max_retries:
+                                status.set_message(f"chunk {idx + 1}: {err_msg}")
+                                break
+                            status.set_message(f"chunk {idx + 1}: {err_msg}. Retrying in {delay:.0f}s")
+                            time.sleep(delay)
+                            continue
+                        if not wav and attempt < max_retries:
+                            status.set_message(f"chunk {idx + 1}: no audio, retrying ({attempt + 1}/{max_retries}) in {retry_delay:.0f}s")
+                            time.sleep(retry_delay)
+                    with results_lock:
+                        results[idx] = wav
+                    status.mark_received(idx, wav is not None)
+                    if not wav:
+                        status.set_message(f"chunk {idx + 1} failed after {max_retries} attempts")
+                except Exception as exc:
+                    status.set_message(f"chunk {idx + 1}: unexpected error: {exc!s:.60}")
+                    with results_lock:
+                        results[idx] = None
+                    status.mark_received(idx, False)
+                finally:
+                    done_queue.put(idx)
+
+        for _ in range(min(n, parallelism)):
+            t = threading.Thread(target=worker, daemon=True)
+            t.start()
 
         next_idx = 0
         play_buffer = []
-        buffer_pcm_bytes = 0
-        yielding_started = False
-
-        def pcm_size(wav_bytes: bytes) -> int:
-            return max(0, len(wav_bytes) - 44)
+        play_deadline: Optional[float] = None  # wall-clock deadline for next chunk
 
         while next_idx < n:
-            done_queue.get(timeout=120)
+            # Compute remaining time before we give up waiting
+            if play_deadline is not None:
+                remaining = play_deadline - time.monotonic()
+                if remaining <= 0:
+                    status.set_message(f"Playback timed out")
+                    break
+                wait = min(remaining, 1.0)
+            else:
+                wait = 120
+
+            try:
+                done_queue.get(timeout=wait)
+            except queue.Empty:
+                if play_deadline is not None and time.monotonic() >= play_deadline:
+                    status.set_message(f"Playback timed out")
+                    break
+                if play_deadline is None:
+                    status.set_message("timed out waiting for chunk — thread may be hung")
+                    break
+                continue  # deadline not reached yet, keep waiting
+
             with results_lock:
                 while next_idx < n and next_idx in results:
                     chunk = results.pop(next_idx)
@@ -835,21 +884,16 @@ class GeminiLiveAPI:
                     next_idx += 1
                     if chunk:
                         play_buffer.append((play_idx, chunk))
-                        buffer_pcm_bytes += pcm_size(chunk)
 
-            all_done = (next_idx == n)
-
-            if not yielding_started:
-                if buffer_pcm_bytes >= min_buffer_pcm or all_done:
-                    yielding_started = True
-
-            if yielding_started:
-                while play_buffer:
-                    play_idx, chunk = play_buffer.pop(0)
-                    buffer_pcm_bytes -= pcm_size(chunk)
-                    status.mark_playing(play_idx)
-                    yield chunk
-                    status.mark_played()
+            while play_buffer:
+                play_idx, chunk = play_buffer.pop(0)
+                play_deadline = None  # reset: we have something to play
+                status.mark_playing(play_idx)
+                yield chunk
+                status.mark_played()
+                # Start the deadline clock after each chunk finishes playing
+                if next_idx < n:
+                    play_deadline = time.monotonic() + chunk_timeout
 
         status.finish()
 
@@ -860,6 +904,8 @@ class GeminiLiveAPI:
         parallelism: int = 4,
         min_buffer_seconds: float = 30.0,
         min_sentence_chars: int = 80,
+        min_sentence_chars_growth: float = 2.0,
+        chunk_timeout: float = 2.0,
         max_retries: int = 3,
         retry_delay: float = 1.0,
         voice_name: Optional[str] = None,
@@ -933,16 +979,14 @@ class GeminiLiveAPI:
             // To cancel (e.g. stop button):
             abortController.abort();   // closes the connection → server cancels
         """
-        sentences = _split_sentences(text, min_chars=min_sentence_chars)
+        sentences = _split_sentences(text, min_chars=min_sentence_chars, growth=min_sentence_chars_growth)
         n = len(sentences)
         if n == 0:
             return
 
-        pcm_bytes_per_sec = DEFAULT_SAMPLE_RATE * 2
-        min_buffer_pcm = int(min_buffer_seconds * pcm_bytes_per_sec)
 
         status = ParallelTTSStatus(n)
-        status.start(parallelism)
+        status.start(parallelism, sizes=[len(s) for s in sentences])
 
         loop = asyncio.get_event_loop()
         sem = asyncio.Semaphore(parallelism)
@@ -952,51 +996,71 @@ class GeminiLiveAPI:
         async def synthesize_one(idx: int) -> None:
             async with sem:
                 wav = None
-                for attempt in range(1, max_retries + 1):
-                    try:
-                        wav = await loop.run_in_executor(
-                            None,
-                            lambda: self.synthesize_wav(
-                                sentences[idx],
-                                voice_name=voice_name,
-                                character_name=character_name,
-                                style=style,
-                                log=status.set_message,
-                            ),
-                        )
-                        if wav:
-                            break
-                    except Exception as exc:
-                        delay = _error_retry_delay(exc, retry_delay)
-                        err_msg = _friendly_error(exc)
-                        if delay is None or attempt == max_retries:
-                            status.set_message(f"chunk {idx + 1}: {err_msg}")
-                            break
-                        status.set_message(f"chunk {idx + 1}: {err_msg}. Retrying in {delay:.0f}s")
-                        await asyncio.sleep(delay)
-                        continue
-                    if not wav and attempt < max_retries:
-                        status.set_message(f"chunk {idx + 1}: no audio, retrying ({attempt + 1}/{max_retries})")
-                        await asyncio.sleep(retry_delay)
-                results[idx] = wav
-                status.mark_received(idx, wav is not None)
-                if not wav:
-                    status.set_message(f"chunk {idx + 1} failed after {max_retries} attempts")
-                await done_queue.put(idx)
+                try:
+                    for attempt in range(1, max_retries + 1):
+                        try:
+                            wav = await loop.run_in_executor(
+                                None,
+                                lambda: self.synthesize_wav(
+                                    sentences[idx],
+                                    voice_name=voice_name,
+                                    character_name=character_name,
+                                    style=style,
+                                    log=status.set_message,
+                                ),
+                            )
+                            if wav:
+                                break
+                        except Exception as exc:
+                            delay = _error_retry_delay(exc, retry_delay)
+                            err_msg = _friendly_error(exc)
+                            if delay is None or attempt == max_retries:
+                                status.set_message(f"chunk {idx + 1}: {err_msg}")
+                                break
+                            status.set_message(f"chunk {idx + 1}: {err_msg}. Retrying in {delay:.0f}s")
+                            await asyncio.sleep(delay)
+                            continue
+                        if not wav and attempt < max_retries:
+                            status.set_message(f"chunk {idx + 1}: no audio, retrying ({attempt + 1}/{max_retries}) in {retry_delay:.0f}s")
+                            await asyncio.sleep(retry_delay)
+                    results[idx] = wav
+                    status.mark_received(idx, wav is not None)
+                    if not wav:
+                        status.set_message(f"chunk {idx + 1} failed after {max_retries} attempts")
+                except Exception as exc:
+                    status.set_message(f"chunk {idx + 1}: unexpected error: {exc!s:.60}")
+                    results[idx] = None
+                    status.mark_received(idx, False)
+                finally:
+                    await done_queue.put(idx)
 
         tasks = [asyncio.create_task(synthesize_one(i)) for i in range(n)]
 
         next_idx = 0
         play_buffer = []
-        buffer_pcm_bytes = 0
-        yielding_started = False
-
-        def pcm_size(wav_bytes: bytes) -> int:
-            return max(0, len(wav_bytes) - 44)
+        play_deadline: Optional[float] = None
 
         try:
             while next_idx < n:
-                await done_queue.get()
+                if play_deadline is not None:
+                    remaining = play_deadline - time.monotonic()
+                    if remaining <= 0:
+                        status.set_message(f"Playback timed out")
+                        break
+                    wait = min(remaining, 1.0)
+                else:
+                    wait = 120
+
+                try:
+                    await asyncio.wait_for(done_queue.get(), timeout=wait)
+                except asyncio.TimeoutError:
+                    if play_deadline is not None and time.monotonic() >= play_deadline:
+                        status.set_message(f"Playback timed out")
+                        break
+                    if play_deadline is None:
+                        status.set_message("timed out waiting for chunk — thread may be hung")
+                        break
+                    continue
 
                 while next_idx < n and next_idx in results:
                     chunk = results.pop(next_idx)
@@ -1004,20 +1068,15 @@ class GeminiLiveAPI:
                     next_idx += 1
                     if chunk:
                         play_buffer.append((play_idx, chunk))
-                        buffer_pcm_bytes += pcm_size(chunk)
 
-                all_done = (next_idx == n)
-
-                if not yielding_started and (buffer_pcm_bytes >= min_buffer_pcm or all_done):
-                    yielding_started = True
-
-                if yielding_started:
-                    while play_buffer:
-                        play_idx, chunk = play_buffer.pop(0)
-                        buffer_pcm_bytes -= pcm_size(chunk)
-                        status.mark_playing(play_idx)
-                        yield chunk
-                        status.mark_played()
+                while play_buffer:
+                    play_idx, chunk = play_buffer.pop(0)
+                    play_deadline = None
+                    status.mark_playing(play_idx)
+                    yield chunk
+                    status.mark_played()
+                    if next_idx < n:
+                        play_deadline = time.monotonic() + chunk_timeout
         finally:
             for t in tasks:
                 t.cancel()

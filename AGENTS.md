@@ -43,6 +43,7 @@ CONTRIBUTING.md           How to add voice characters
 ## Key Conventions
 
 - **Never commit without explicit user instruction.** Wait for the user to say "ok commit", "commit it", or similar before running `git commit`.
+- **Never create a PR without explicit user instruction.** Wait for the user to say "create PR", "open PR", or similar before running `gh pr create`.
 - **Always announce who is committing before running `git commit`** — print a line in the format:
   `Committing on behalf of <name> (<email>)`
   using the output of `git config user.name` and `git config user.email`.

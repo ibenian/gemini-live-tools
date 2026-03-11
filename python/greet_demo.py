@@ -44,11 +44,11 @@ def pick_character() -> str:
     return names[idx]
 
 
-def generate_greeting(client, character: str) -> str:
+def generate_greeting(client, character: str, length: int = 100) -> str:
     char_desc = CHARACTERS[character]
     prompt = (
         f"You are: {char_desc}\n\n"
-        "Generate a short, creative greeting (2–4 sentences) that perfectly captures "
+        f"Generate a creative greeting of approximately {length} words that perfectly captures "
         "your character's voice, style, and personality. Make it original and vivid. "
         "Plain text only — no markdown, no bullet points."
     )
@@ -76,12 +76,24 @@ def main() -> None:
         help="1 = sequential (default), N > 1 = parallel TTS with N threads",
     )
     parser.add_argument(
+        "--length", type=int, default=100,
+        help="Approximate word count for the generated greeting (default 100)",
+    )
+    parser.add_argument(
         "--min-sentence-chars", type=int, default=80,
         help="Merge sentences shorter than this (default 80)",
     )
     parser.add_argument(
         "--min-buffer-seconds", type=float, default=30.0,
         help="Seconds of audio to buffer before playback starts (default 30)",
+    )
+    parser.add_argument(
+        "--chunk-timeout", type=float, default=2.0,
+        help="Stop playback if next chunk is not ready within this many seconds after previous finishes (default 2.0)",
+    )
+    parser.add_argument(
+        "--min-sentence-chars-growth", type=float, default=2.0,
+        help="Multiply min-sentence-chars by this factor for each successive chunk (default 2.0, 1.0 = no growth)",
     )
     args = parser.parse_args()
 
@@ -100,7 +112,7 @@ def main() -> None:
     api = GeminiLiveAPI(api_key=api_key, client=client)
 
     print("\n  Generating greeting...")
-    greeting = generate_greeting(client, character)
+    greeting = generate_greeting(client, character, length=args.length)
     print(f"\n  \"{greeting}\"\n")
 
     print("  Preparing for TTS...")
@@ -122,7 +134,9 @@ def main() -> None:
             prepared,
             parallelism=args.parallelism,
             min_sentence_chars=args.min_sentence_chars,
+            min_sentence_chars_growth=args.min_sentence_chars_growth,
             min_buffer_seconds=args.min_buffer_seconds,
+            chunk_timeout=args.chunk_timeout,
             character_name=character,
         ):
             played += 1
@@ -134,3 +148,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    os._exit(0)  # bypass httpx/genai connection pool atexit handlers
