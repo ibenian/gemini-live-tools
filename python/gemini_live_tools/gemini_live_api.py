@@ -1,6 +1,7 @@
 """Shared Gemini Live TTS API and character definitions."""
 
 import io
+import pathlib
 import re
 import wave
 import json
@@ -9,7 +10,7 @@ import time
 import os
 import queue
 import threading
-from typing import AsyncIterator, Callable, Iterator, Optional, Dict
+from typing import AsyncIterator, Callable, Iterator, Optional, Dict, Union
 
 
 # Shared character/style definitions for chat + TTS behaviors.
@@ -766,6 +767,7 @@ class GeminiLiveAPI:
         voice_name: Optional[str] = None,
         character_name: Optional[str] = None,
         style: Optional[str] = None,
+        output_path: Optional[Union[str, pathlib.Path]] = None,
     ) -> Iterator[bytes]:
         """Split text into sentences and synthesize in parallel, yielding WAV chunks in order.
 
@@ -781,6 +783,9 @@ class GeminiLiveAPI:
             voice_name:         Gemini voice override.
             character_name:     Character style to apply.
             style:              Additional style guidance.
+            output_path:        Optional path. When provided, all chunks are merged into a
+                                single WAV file written to this path after the last chunk
+                                is yielded.
 
         Yields:
             WAV bytes for each sentence, in order.
@@ -791,6 +796,7 @@ class GeminiLiveAPI:
             return
 
         # WAV header is 44 bytes; PCM data follows. 16-bit mono at DEFAULT_SAMPLE_RATE.
+        WAV_HEADER_SIZE = 44
 
         status = ParallelTTSStatus(n)
         status.start(parallelism, sizes=[len(s) for s in sentences])
@@ -854,6 +860,7 @@ class GeminiLiveAPI:
         next_idx = 0
         play_buffer = []
         play_deadline: Optional[float] = None  # wall-clock deadline for next chunk
+        pcm_parts: list = [] if output_path is not None else None  # type: ignore[assignment]
 
         while next_idx < n:
             # Compute remaining time before we give up waiting
@@ -889,6 +896,8 @@ class GeminiLiveAPI:
                 play_idx, chunk = play_buffer.pop(0)
                 play_deadline = None  # reset: we have something to play
                 status.mark_playing(play_idx)
+                if pcm_parts is not None:
+                    pcm_parts.append(chunk[WAV_HEADER_SIZE:])
                 yield chunk
                 status.mark_played()
                 # Start the deadline clock after each chunk finishes playing
@@ -896,6 +905,10 @@ class GeminiLiveAPI:
                     play_deadline = time.monotonic() + chunk_timeout
 
         status.finish()
+
+        if output_path is not None and pcm_parts:
+            merged_wav = pcm_to_wav_bytes(b"".join(pcm_parts), sample_rate=DEFAULT_SAMPLE_RATE)
+            pathlib.Path(output_path).write_bytes(merged_wav)
 
     async def astream_parallel_wav(
         self,
@@ -911,6 +924,7 @@ class GeminiLiveAPI:
         voice_name: Optional[str] = None,
         character_name: Optional[str] = None,
         style: Optional[str] = None,
+        output_path: Optional[Union[str, pathlib.Path]] = None,
     ) -> AsyncIterator[bytes]:
         """Async version of stream_parallel_wav for use with async web frameworks.
 
@@ -984,6 +998,7 @@ class GeminiLiveAPI:
         if n == 0:
             return
 
+        WAV_HEADER_SIZE = 44
 
         status = ParallelTTSStatus(n)
         status.start(parallelism, sizes=[len(s) for s in sentences])
@@ -1039,6 +1054,7 @@ class GeminiLiveAPI:
         next_idx = 0
         play_buffer = []
         play_deadline: Optional[float] = None
+        pcm_parts: list = [] if output_path is not None else None  # type: ignore[assignment]
 
         try:
             while next_idx < n:
@@ -1073,6 +1089,8 @@ class GeminiLiveAPI:
                     play_idx, chunk = play_buffer.pop(0)
                     play_deadline = None
                     status.mark_playing(play_idx)
+                    if pcm_parts is not None:
+                        pcm_parts.append(chunk[WAV_HEADER_SIZE:])
                     yield chunk
                     status.mark_played()
                     if next_idx < n:
@@ -1082,4 +1100,8 @@ class GeminiLiveAPI:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             status.finish()
+
+        if output_path is not None and pcm_parts:
+            merged_wav = pcm_to_wav_bytes(b"".join(pcm_parts), sample_rate=DEFAULT_SAMPLE_RATE)
+            pathlib.Path(output_path).write_bytes(merged_wav)
 
