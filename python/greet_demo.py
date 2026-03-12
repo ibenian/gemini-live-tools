@@ -95,6 +95,10 @@ def main() -> None:
         "--min-sentence-chars-growth", type=float, default=2.0,
         help="Multiply min-sentence-chars by this factor for each successive chunk (default 2.0, 1.0 = no growth)",
     )
+    parser.add_argument(
+        "--output", type=str, default=None,
+        help="If set, merge all chunks and write the complete WAV file to this path",
+    )
     args = parser.parse_args()
 
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -126,6 +130,10 @@ def main() -> None:
         if not wav:
             print(f"Error: synthesis failed — {api.last_error}")
             sys.exit(1)
+        if args.output:
+            import pathlib
+            pathlib.Path(args.output).write_bytes(wav)
+            print(f"  Saved to {args.output}\n")
         print("  Playing...\n")
         play_wav(wav)
     else:
@@ -138,12 +146,15 @@ def main() -> None:
             min_buffer_seconds=args.min_buffer_seconds,
             chunk_timeout=args.chunk_timeout,
             character_name=character,
+            output_path=args.output,
         ):
             played += 1
             play_wav(chunk)
         if not played:
             print("Error: no audio chunks returned.")
             sys.exit(1)
+        if args.output:
+            print(f"\n  Saved to {args.output}")
 
 
 if __name__ == "__main__":
