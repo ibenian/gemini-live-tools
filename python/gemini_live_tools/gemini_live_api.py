@@ -293,14 +293,14 @@ class ParallelTTSStatus:
 
         [TTS-Parallel] Received 4/8 [▶ *   * *] Playing 1/8
 
-    Icons: ▶ = currently playing, * = received OK, ! = failed, (space) = pending.
+    Icons: ▶ = currently playing, L = received via Live API, * = received via fallback, ! = failed, (space) = pending.
     When complete, shows a final "Played N/N" line.
 
     Example::
 
         status = ParallelTTSStatus(n=8)
         status.start(parallelism=4)
-        status.mark_received(idx=2, ok=True)
+        status.mark_received(idx=2, delivery_mode="live")
         status.log("chunk 3 retrying...")
         status.mark_playing(idx=0)
         status.mark_played()
@@ -325,12 +325,16 @@ class ParallelTTSStatus:
             chunks_info = f"{self._n} chunks"
         print(f"[TTS-Parallel] {chunks_info}, parallelism={parallelism}")
 
-    def mark_received(self, idx: int, ok: bool) -> None:
-        """Record that chunk `idx` has been synthesized (ok=True) or failed (ok=False)."""
+    def mark_received(self, idx: int, delivery_mode: Optional[str]) -> None:
+        """Record that chunk `idx` has been synthesized.
+
+        Args:
+            delivery_mode: ``"live"``, ``"fallback"``, or ``None``/``False`` for failure.
+        """
         with self._lock:
-            self._chunk_state[idx] = ok
+            self._chunk_state[idx] = delivery_mode if delivery_mode else False
             self._received += 1
-            if ok:
+            if delivery_mode == "live":
                 self._message = ""
             self._render()
 
@@ -366,7 +370,9 @@ class ParallelTTSStatus:
         for i in range(n):
             if not done and i == self._playing_idx:
                 icons.append("▶")
-            elif self._chunk_state[i] is True:
+            elif self._chunk_state[i] == "live":
+                icons.append("L")
+            elif self._chunk_state[i] == "fallback":
                 icons.append("*")
             elif self._chunk_state[i] is False:
                 icons.append("!")
@@ -500,23 +506,72 @@ class GeminiLiveAPI:
         voice_name: Optional[str],
         character_name: Optional[str],
         style: Optional[str],
-    ) -> dict:
+    ) -> "types.LiveConnectConfig":
+        from google.genai import types
         resolved_voice = self._resolve_voice(voice_name, character_name)
-        config = {
-            "response_modalities": ["AUDIO"],
-            "system_instruction": self._tts_system_instruction(character_name, style),
-            "temperature": 0.0,
-            "top_p": 1.0,
-            "max_output_tokens": 32768,
-            "speech_config": {
-                "voice_config": {
-                    "prebuilt_voice_config": {
-                        "voice_name": resolved_voice
-                    }
-                }
-            },
-        }
-        return config
+        return types.LiveConnectConfig(
+            response_modalities=["AUDIO"],
+            system_instruction=self._tts_system_instruction(character_name, style),
+            temperature=0.0,
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=resolved_voice)
+                )
+            ),
+        )
+
+    async def _synthesize_pcm_via_live(
+        self,
+        text: str,
+        voice_name: Optional[str],
+        character_name: Optional[str],
+        style: Optional[str],
+        log: Optional[Callable[[str], None]],
+        timeout: float = 30.0,
+    ) -> Optional[bytes]:
+        _log = log or print
+        try:
+            from google import genai
+            client = genai.Client(api_key=self.api_key)
+            config = self._build_live_config(voice_name, character_name, style)
+            clean_text = self._clean_for_tts(text)
+            pcm_chunks = []
+
+            async def _run_session() -> None:
+                async with client.aio.live.connect(model=self.live_model, config=config) as session:
+                    await session.send_client_content(
+                        turns={"role": "user", "parts": [{"text": clean_text}]},
+                        turn_complete=True,
+                    )
+                    async for response in session.receive():
+                        if response.data:
+                            pcm_chunks.append(response.data)
+                        server_content = getattr(response, "server_content", None)
+                        if server_content and getattr(server_content, "turn_complete", False):
+                            break
+
+            await asyncio.wait_for(_run_session(), timeout=timeout)
+            if not pcm_chunks:
+                return None
+            joined = b"".join(pcm_chunks)
+            _log(f"[TTS] Live API: {len(pcm_chunks)} chunks, {len(joined)} bytes")
+            return self._audio_bytes_to_pcm(joined, "audio/pcm")
+        except asyncio.TimeoutError:
+            _log(f"[TTS] Live API timed out after {timeout:.0f}s, trying fallback")
+            return None
+        except Exception as exc:
+            _log(f"[TTS] Live API error: {_friendly_error(exc)}, trying fallback")
+            return None
+
+    def _synthesize_pcm_via_live_sync(
+        self,
+        text: str,
+        voice_name: Optional[str],
+        character_name: Optional[str],
+        style: Optional[str],
+        log: Optional[Callable[[str], None]],
+    ) -> Optional[bytes]:
+        return asyncio.run(self._synthesize_pcm_via_live(text, voice_name, character_name, style, log))
 
     def stream_tts(
         self,
@@ -528,9 +583,16 @@ class GeminiLiveAPI:
         style: Optional[str] = None,
         should_cancel: Optional[Callable[[], bool]] = None,
         pre_cleaned: bool = False,
+        use_live: bool = False,
         log: Optional[Callable[[str], None]] = None,
     ) -> bool:
-        """Generate PCM audio chunks using Gemini TTS (generate_content API)."""
+        """Generate PCM audio chunks using Gemini TTS.
+
+        Args:
+            use_live: If True, attempt synthesis via the Live API first and fall
+                      back to generate_content on failure. Defaults to False
+                      (generate_content only).
+        """
         self.last_error = None
         self.last_delivery_mode = None
         if not self.api_key:
@@ -538,14 +600,32 @@ class GeminiLiveAPI:
             return False
 
         try:
-            pcm = self._fallback_tts_pcm(
-                text=text,
-                voice_name=voice_name,
-                character_name=character_name,
-                style=style,
-                pre_cleaned=pre_cleaned,
-                log=log,
-            )
+            pcm = None
+            if use_live:
+                pcm = self._synthesize_pcm_via_live_sync(
+                    text=text,
+                    voice_name=voice_name,
+                    character_name=character_name,
+                    style=style,
+                    log=log,
+                )
+                if pcm:
+                    self.last_delivery_mode = "live"
+            if not pcm:
+                # generate_content TTS models
+                if use_live:
+                    _log = log or print
+                    _log("[TTS] Live TTS failed, falling back to generate_content TTS")
+                pcm = self._fallback_tts_pcm(
+                    text=text,
+                    voice_name=voice_name,
+                    character_name=character_name,
+                    style=style,
+                    pre_cleaned=pre_cleaned,
+                    log=log,
+                )
+                if pcm:
+                    self.last_delivery_mode = "fallback"
             if not pcm:
                 self.last_error = "No audio data received from Gemini TTS."
                 return False
@@ -553,7 +633,6 @@ class GeminiLiveAPI:
             for idx in range(0, len(pcm), chunk_size):
                 if should_cancel and should_cancel():
                     break
-                self.last_delivery_mode = "tts"
                 on_chunk(pcm[idx:idx + chunk_size])
             return True
         except Exception as exc:
@@ -716,6 +795,7 @@ class GeminiLiveAPI:
         voice_name: Optional[str] = None,
         character_name: Optional[str] = None,
         style: Optional[str] = None,
+        use_live: bool = False,
         log: Optional[Callable[[str], None]] = None,
     ) -> Optional[bytes]:
         """Generate full PCM payload by streaming and collecting chunks."""
@@ -726,6 +806,7 @@ class GeminiLiveAPI:
             voice_name=voice_name,
             character_name=character_name,
             style=style,
+            use_live=use_live,
             log=log,
         )
         if not ok:
@@ -739,6 +820,7 @@ class GeminiLiveAPI:
         voice_name: Optional[str] = None,
         character_name: Optional[str] = None,
         style: Optional[str] = None,
+        use_live: bool = False,
         log: Optional[Callable[[str], None]] = None,
     ) -> Optional[bytes]:
         """Generate WAV bytes."""
@@ -747,6 +829,7 @@ class GeminiLiveAPI:
             voice_name=voice_name,
             character_name=character_name,
             style=style,
+            use_live=use_live,
             log=log,
         )
         if not pcm:
@@ -767,6 +850,7 @@ class GeminiLiveAPI:
         voice_name: Optional[str] = None,
         character_name: Optional[str] = None,
         style: Optional[str] = None,
+        use_live: bool = False,
         output_path: Optional[Union[str, pathlib.Path]] = None,
     ) -> Iterator[bytes]:
         """Split text into sentences and synthesize in parallel, yielding WAV chunks in order.
@@ -824,6 +908,7 @@ class GeminiLiveAPI:
                                 voice_name=voice_name,
                                 character_name=character_name,
                                 style=style,
+                                use_live=use_live,
                                 log=status.set_message,
                             )
                             if wav:
@@ -842,14 +927,14 @@ class GeminiLiveAPI:
                             time.sleep(retry_delay)
                     with results_lock:
                         results[idx] = wav
-                    status.mark_received(idx, wav is not None)
+                    status.mark_received(idx, self.last_delivery_mode if wav else None)
                     if not wav:
                         status.set_message(f"chunk {idx + 1} failed after {max_retries} attempts")
                 except Exception as exc:
                     status.set_message(f"chunk {idx + 1}: unexpected error: {exc!s:.60}")
                     with results_lock:
                         results[idx] = None
-                    status.mark_received(idx, False)
+                    status.mark_received(idx, None)
                 finally:
                     done_queue.put(idx)
 
@@ -924,6 +1009,7 @@ class GeminiLiveAPI:
         voice_name: Optional[str] = None,
         character_name: Optional[str] = None,
         style: Optional[str] = None,
+        use_live: bool = False,
         output_path: Optional[Union[str, pathlib.Path]] = None,
     ) -> AsyncIterator[bytes]:
         """Async version of stream_parallel_wav for use with async web frameworks.
@@ -1021,6 +1107,7 @@ class GeminiLiveAPI:
                                     voice_name=voice_name,
                                     character_name=character_name,
                                     style=style,
+                                    use_live=use_live,
                                     log=status.set_message,
                                 ),
                             )
@@ -1039,13 +1126,13 @@ class GeminiLiveAPI:
                             status.set_message(f"chunk {idx + 1}: no audio, retrying ({attempt + 1}/{max_retries}) in {retry_delay:.0f}s")
                             await asyncio.sleep(retry_delay)
                     results[idx] = wav
-                    status.mark_received(idx, wav is not None)
+                    status.mark_received(idx, self.last_delivery_mode if wav else None)
                     if not wav:
                         status.set_message(f"chunk {idx + 1} failed after {max_retries} attempts")
                 except Exception as exc:
                     status.set_message(f"chunk {idx + 1}: unexpected error: {exc!s:.60}")
                     results[idx] = None
-                    status.mark_received(idx, False)
+                    status.mark_received(idx, None)
                 finally:
                     await done_queue.put(idx)
 
