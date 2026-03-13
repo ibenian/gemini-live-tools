@@ -30,6 +30,8 @@ dev.sh                         Dev helper: setup, test, shell
 # Demo options
 ./dev.sh test --parallelism 4                  # parallel TTS (4 concurrent chunks)
 ./dev.sh test --parallelism 4 --min-sentence-chars 60 --min-buffer-seconds 10
+./dev.sh test --live                           # use Gemini Live API (falls back to generate_content on failure)
+./dev.sh test --parallelism 4 --live           # parallel TTS with Live API (falls back to generate_content per chunk on failure)
 ```
 
 ## Install (Python)
@@ -61,9 +63,16 @@ api = GeminiLiveAPI(api_key="...", client=client)
 prepared = api.prepare_text("Hello world", character_name="crisp")
 wav = api.synthesize_wav(prepared, character_name="crisp")
 
+# Single-shot TTS via Live API (falls back to generate_content on failure)
+wav = api.synthesize_wav(prepared, character_name="crisp", use_live=True)
+
 # Parallel streaming TTS (sync — yields one WAV chunk per sentence in order)
 for chunk in api.stream_parallel_wav(prepared, parallelism=4, character_name="crisp"):
     play(chunk)   # play each sentence as it arrives
+
+# Parallel streaming TTS with Live API
+for chunk in api.stream_parallel_wav(prepared, parallelism=4, character_name="crisp", use_live=True):
+    play(chunk)
 
 # Parallel streaming TTS (async — for FastAPI / aiohttp)
 async for chunk in api.astream_parallel_wav(prepared, parallelism=4, character_name="crisp"):
@@ -72,7 +81,8 @@ async for chunk in api.astream_parallel_wav(prepared, parallelism=4, character_n
 # Use ParallelTTSStatus standalone for your own streaming loops
 status = ParallelTTSStatus(n=total_chunks)
 status.start(parallelism=4)
-status.mark_received(idx=0, ok=True)   # updates status line
+status.mark_received(idx=0, delivery_mode="live")     # L icon — received via Live API
+status.mark_received(idx=1, delivery_mode="fallback") # * icon — received via generate_content
 status.mark_playing(idx=0)             # shows ▶ on status line
 status.mark_played()
 status.finish()                        # prints final Played N/N line

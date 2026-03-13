@@ -99,6 +99,10 @@ def main() -> None:
         "--output", type=str, default=None,
         help="If set, merge all chunks and write the complete WAV file to this path",
     )
+    parser.add_argument(
+        "--live", action="store_true", default=False,
+        help="Use Gemini Live API for synthesis (falls back to generate_content on failure)",
+    )
     args = parser.parse_args()
 
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -126,7 +130,7 @@ def main() -> None:
     print("  Synthesizing audio...\n")
 
     if args.parallelism == 1:
-        wav = api.synthesize_wav(prepared, character_name=character)
+        wav = api.synthesize_wav(prepared, character_name=character, use_live=args.live)
         if not wav:
             print(f"Error: synthesis failed — {api.last_error}")
             sys.exit(1)
@@ -146,6 +150,7 @@ def main() -> None:
             min_buffer_seconds=args.min_buffer_seconds,
             chunk_timeout=args.chunk_timeout,
             character_name=character,
+            use_live=args.live,
             output_path=args.output,
         ):
             played += 1

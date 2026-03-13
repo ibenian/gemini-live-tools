@@ -48,8 +48,11 @@ Progress is displayed via `ParallelTTSStatus` — a reusable, thread-safe class
 that renders a single updating status line:
 
 ```
-[TTS-Parallel] Received 4/8 [▶ *   * *] Playing 1/8
+[TTS-Parallel] Received 4/8 [▶ L   * L] Playing 1/8
 ```
+
+Icons: `▶` = currently playing, `L` = received via Live API, `*` = received via
+generate_content fallback, `!` = failed, ` ` = pending.
 
 Both `stream_parallel_wav` and `astream_parallel_wav` use it internally. You
 can also import and use it directly for your own streaming loops:
@@ -59,7 +62,9 @@ from gemini_live_tools import ParallelTTSStatus
 
 status = ParallelTTSStatus(n=total_chunks)
 status.start(parallelism=4)
-status.mark_received(idx, ok=True)
+status.mark_received(idx, delivery_mode="live")      # L icon
+status.mark_received(idx, delivery_mode="fallback")  # * icon
+status.mark_received(idx, delivery_mode=None)        # ! icon (failure)
 status.mark_playing(idx)
 status.mark_played()
 status.finish()
@@ -194,6 +199,7 @@ finally block in astream_parallel_wav:
 | `min_sentence_chars_growth` | `2.0` | Multiply threshold by this factor each chunk (`1.0` = no growth) |
 | `max_retries` | `3` | Retry attempts per sentence on failure |
 | `retry_delay` | `1.0` | Seconds between retries |
+| `use_live` | `False` | Use Gemini Live API for synthesis; falls back to `generate_content` on failure. Status line shows `L` (live) or `*` (fallback) per chunk. |
 | `voice_name` | `None` | Gemini voice override |
 | `character_name` | `None` | Character style preset |
 | `style` | `None` | Additional style guidance |
