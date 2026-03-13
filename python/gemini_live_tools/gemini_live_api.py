@@ -527,6 +527,7 @@ class GeminiLiveAPI:
         character_name: Optional[str],
         style: Optional[str],
         log: Optional[Callable[[str], None]],
+        timeout: float = 30.0,
     ) -> Optional[bytes]:
         _log = log or print
         try:
@@ -535,22 +536,29 @@ class GeminiLiveAPI:
             config = self._build_live_config(voice_name, character_name, style)
             clean_text = self._clean_for_tts(text)
             pcm_chunks = []
-            async with client.aio.live.connect(model=self.live_model, config=config) as session:
-                await session.send_client_content(
-                    turns={"role": "user", "parts": [{"text": clean_text}]},
-                    turn_complete=True,
-                )
-                async for response in session.receive():
-                    if response.data:
-                        pcm_chunks.append(response.data)
-                    server_content = getattr(response, "server_content", None)
-                    if server_content and getattr(server_content, "turn_complete", False):
-                        break
+
+            async def _run_session() -> None:
+                async with client.aio.live.connect(model=self.live_model, config=config) as session:
+                    await session.send_client_content(
+                        turns={"role": "user", "parts": [{"text": clean_text}]},
+                        turn_complete=True,
+                    )
+                    async for response in session.receive():
+                        if response.data:
+                            pcm_chunks.append(response.data)
+                        server_content = getattr(response, "server_content", None)
+                        if server_content and getattr(server_content, "turn_complete", False):
+                            break
+
+            await asyncio.wait_for(_run_session(), timeout=timeout)
             if not pcm_chunks:
                 return None
             joined = b"".join(pcm_chunks)
             _log(f"[TTS] Live API: {len(pcm_chunks)} chunks, {len(joined)} bytes")
             return self._audio_bytes_to_pcm(joined, "audio/pcm")
+        except asyncio.TimeoutError:
+            _log(f"[TTS] Live API timed out after {timeout:.0f}s, trying fallback")
+            return None
         except Exception as exc:
             _log(f"[TTS] Live API error: {_friendly_error(exc)}, trying fallback")
             return None

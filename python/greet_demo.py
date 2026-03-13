@@ -72,28 +72,28 @@ def play_wav(wav_bytes: bytes) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Gemini character greeting demo")
     parser.add_argument(
-        "--parallelism", type=int, default=1,
-        help="1 = sequential (default), N > 1 = parallel TTS with N threads",
+        "--parallelism", type=int, default=3,
+        help="1 = sequential, N > 1 = parallel TTS with N threads (default 3)",
     )
     parser.add_argument(
         "--length", type=int, default=100,
         help="Approximate word count for the generated greeting (default 100)",
     )
     parser.add_argument(
-        "--min-sentence-chars", type=int, default=80,
-        help="Merge sentences shorter than this (default 80)",
+        "--min-sentence-chars", type=int, default=100,
+        help="Merge sentences shorter than this (default 100)",
     )
     parser.add_argument(
         "--min-buffer-seconds", type=float, default=30.0,
         help="Seconds of audio to buffer before playback starts (default 30)",
     )
     parser.add_argument(
-        "--chunk-timeout", type=float, default=2.0,
-        help="Stop playback if next chunk is not ready within this many seconds after previous finishes (default 2.0)",
+        "--chunk-timeout", type=float, default=15.0,
+        help="Stop playback if next chunk is not ready within this many seconds after previous finishes (default 15)",
     )
     parser.add_argument(
-        "--min-sentence-chars-growth", type=float, default=2.0,
-        help="Multiply min-sentence-chars by this factor for each successive chunk (default 2.0, 1.0 = no growth)",
+        "--min-sentence-chars-growth", type=float, default=1.2,
+        help="Multiply min-sentence-chars by this factor for each successive chunk (default 1.2, 1.0 = no growth)",
     )
     parser.add_argument(
         "--output", type=str, default=None,
