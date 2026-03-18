@@ -48,10 +48,11 @@ The version in `pyproject.toml` is already the version being developed. No chang
 
 The version in `pyproject.toml` is the version to release. The release flow is:
 
-1. **Tag** the current commit using the version in `pyproject.toml`:
+1. **Tag** the current commit and create a GitHub release:
    ```bash
    git tag v0.1.2
    git push origin v0.1.2
+   gh release create v0.1.2 --title "v0.1.2" --notes "..."
    ```
 
 2. **Immediately bump** `pyproject.toml` to the next patch version and commit:
@@ -59,6 +60,7 @@ The version in `pyproject.toml` is the version to release. The release flow is:
    # Edit python/pyproject.toml: 0.1.2 → 0.1.3
    git add python/pyproject.toml
    git commit -m "chore: bump version to 0.1.3"
+   git push origin main
    ```
 
 This ensures:
