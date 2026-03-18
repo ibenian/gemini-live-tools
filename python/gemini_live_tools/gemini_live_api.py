@@ -322,7 +322,7 @@ class ParallelTTSStatus:
         with self._lock:
             self._muted = True
 
-    def start(self, parallelism: int, sizes: Optional[list] = None) -> None:
+    def start(self, parallelism: int, sizes: Optional[list] = None, sentences: Optional[list] = None) -> None:
         """Print the initial header line."""
         if sizes:
             size_str = ", ".join(str(s) for s in sizes)
@@ -330,6 +330,11 @@ class ParallelTTSStatus:
         else:
             chunks_info = f"{self._n} chunks"
         print(f"[TTS-Parallel] {chunks_info}, parallelism={parallelism}")
+        if sentences:
+            for i, s in enumerate(sentences):
+                preview = s[:80].replace('\n', ' ')
+                suffix = "…" if len(s) > 80 else ""
+                print(f"  [{i}] {preview}{suffix}")
 
     def mark_received(self, idx: int, delivery_mode: Optional[str]) -> None:
         """Record that chunk `idx` has been synthesized.
@@ -884,7 +889,7 @@ class GeminiLiveAPI:
         WAV_HEADER_SIZE = 44
 
         status = ParallelTTSStatus(n)
-        status.start(parallelism, sizes=[len(s) for s in sentences])
+        status.start(parallelism, sizes=[len(s) for s in sentences], sentences=sentences)
 
         results: Dict[int, Optional[bytes]] = {}
         results_lock = threading.Lock()
@@ -1101,7 +1106,7 @@ class GeminiLiveAPI:
         WAV_HEADER_SIZE = 44
 
         status = ParallelTTSStatus(n)
-        status.start(parallelism, sizes=[len(s) for s in sentences])
+        status.start(parallelism, sizes=[len(s) for s in sentences], sentences=sentences)
 
         loop = asyncio.get_event_loop()
         sem = asyncio.Semaphore(parallelism)
