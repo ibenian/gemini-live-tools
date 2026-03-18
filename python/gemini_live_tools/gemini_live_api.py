@@ -338,7 +338,7 @@ class ParallelTTSStatus:
                 else:
                     half = 37
                     preview = flat[:half] + "....." + flat[-half:]
-                print(f"  [{i}] {preview}")
+                print(f"  [{i}] \"{preview}\"")
 
     def mark_received(self, idx: int, delivery_mode: Optional[str]) -> None:
         """Record that chunk `idx` has been synthesized.
