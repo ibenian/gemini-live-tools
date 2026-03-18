@@ -331,6 +331,7 @@ class ParallelTTSStatus:
             chunks_info = f"{self._n} chunks"
         print(f"[TTS-Parallel] {chunks_info}, parallelism={parallelism}")
         if sentences:
+            offset = 0
             for i, s in enumerate(sentences):
                 flat = s.replace('\n', ' ')
                 if len(flat) <= 80:
@@ -338,7 +339,8 @@ class ParallelTTSStatus:
                 else:
                     half = 37
                     preview = flat[:half] + "....." + flat[-half:]
-                print(f"  [{i}] \"{preview}\"")
+                print(f"  [{i}] chars {offset}..{offset + len(s)} \"{preview}\"")
+                offset += len(s) + 1
 
     def mark_received(self, idx: int, delivery_mode: Optional[str]) -> None:
         """Record that chunk `idx` has been synthesized.
