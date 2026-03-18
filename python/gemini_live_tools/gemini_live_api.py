@@ -438,11 +438,29 @@ class GeminiLiveAPI:
             return CHARACTER_DEFAULT_VOICES[character_name]
         return DEFAULT_VOICE
 
+    @staticmethod
+    def _build_reading_prompt(clean_text: str) -> str:
+        """Wrap clean_text in a prompt that prevents the model from stopping early.
+
+        The model tends to treat the first sentence-ending period as a natural
+        stop point.  Framing the input as a multi-sentence passage to be read
+        straight through — with an explicit sentence count and a continuation
+        instruction — significantly reduces early truncation.
+        """
+        sentences = [s for s in re.split(r'(?<=[.!?])\s+', clean_text.strip()) if s.strip()]
+        n = len(sentences)
+        return (
+            f"Read the following passage aloud, word for word, from the first word "
+            f"to the last. It contains {n} sentence(s). After each sentence, "
+            f"continue immediately to the next without stopping. "
+            f"Do not stop until you have read every sentence:\n\n{clean_text}"
+        )
+
     def _tts_system_instruction(self, character_name: Optional[str], style: Optional[str]) -> str:
         instruction = (
-            "You are a text-to-speech renderer. Read the provided text aloud verbatim. "
-            "Do not add any extra words, prefaces, or commentary. "
-            "Read every sentence in the input completely and do not truncate."
+            "You are a text-to-speech renderer. Read the provided passage aloud verbatim, "
+            "word for word, from start to finish. Do not stop early, do not paraphrase, "
+            "do not add commentary."
         )
         character_desc = self._resolve_character(character_name)
         if character_desc:
@@ -541,12 +559,7 @@ class GeminiLiveAPI:
             client = genai.Client(api_key=self.api_key)
             config = self._build_live_config(voice_name, character_name, style)
             clean_text = self._clean_for_tts(text)
-            sentence_count = len([s for s in re.split(r'(?<=[.!?])\s+', clean_text.strip()) if s.strip()])
-            user_text = (
-                f"Read aloud ALL {sentence_count} sentence(s) below, verbatim, in order. "
-                "Do not stop after the first sentence:\n"
-                f"{clean_text}"
-            )
+            user_text = self._build_reading_prompt(clean_text)
             pcm_chunks = []
 
             async def _run_session() -> None:
@@ -739,13 +752,10 @@ class GeminiLiveAPI:
                 except Exception:
                     pass
                 clean_text = text if pre_cleaned else self._clean_for_tts(text)
-                sentence_count = len([s for s in re.split(r'(?<=[.!?])\s+', clean_text.strip()) if s.strip()])
                 payload = (
                     f"Character guidance: {self._resolve_character(character_name)}. "
                     + (f"Additional style guidance: {style}. " if style else "")
-                    + f"Read aloud ALL {sentence_count} sentence(s) in the text below, verbatim, in order. "
-                    "Do not stop after the first sentence. Do not add commentary. Read every sentence to the end:\n"
-                    f"{clean_text}"
+                    + self._build_reading_prompt(clean_text)
                 )
                 for attempt in range(1, max_attempts + 1):
                     try:
