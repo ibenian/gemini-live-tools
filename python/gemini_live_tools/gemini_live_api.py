@@ -460,8 +460,7 @@ class GeminiLiveAPI:
                 "Available tags:\n"
                 "- Non-speech sounds: [sigh], [laughing], [chuckling], [uhm], [gasp]\n"
                 "- Style modifiers: [whispering], [shouting], [sarcasm], [extremely fast], [slowly]\n"
-                "- Pacing/Pauses: [short pause], [medium pause]\n"
-                "Use tags sparingly and contextually. Avoid [long pause] entirely. "
+                "Use tags sparingly and contextually. Avoid all pause tags ([short pause], [medium pause], [long pause]). "
                 "Do NOT use vocalized tags like [scared], [curious], [bored]. "
             )
         else:
@@ -684,6 +683,8 @@ class GeminiLiveAPI:
         text = re.sub(r'\*(.+?)\*', r'\1', text)
         text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
         text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+        # Strip pause tags — they confuse TTS models and produce garbled output
+        text = re.sub(r'\[(?:short|medium|long) pause\]', '', text, flags=re.IGNORECASE)
         # Collapse whitespace
         text = re.sub(r'\s{2,}', ' ', text).strip()
         return text
