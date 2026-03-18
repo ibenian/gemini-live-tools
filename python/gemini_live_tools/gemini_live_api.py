@@ -441,10 +441,8 @@ class GeminiLiveAPI:
     def _tts_system_instruction(self, character_name: Optional[str], style: Optional[str]) -> str:
         instruction = (
             "You are a text-to-speech renderer. Read the provided text aloud verbatim. "
-            "Honor any bracket markup tags like [sigh], [laughing], [whispering], [short pause], etc. "
-            "Do not speak the tags themselves; perform them as directed. "
             "Do not add any extra words, prefaces, or commentary. "
-            "Read the complete input, including all sentences, and do not truncate."
+            "Read every sentence in the input completely and do not truncate."
         )
         character_desc = self._resolve_character(character_name)
         if character_desc:
