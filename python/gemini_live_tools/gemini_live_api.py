@@ -314,7 +314,13 @@ class ParallelTTSStatus:
         self._received = 0
         self._played = 0
         self._message = ""
+        self._muted = False
         self._lock = threading.Lock()
+
+    def mute(self) -> None:
+        """Suppress all further status renders."""
+        with self._lock:
+            self._muted = True
 
     def start(self, parallelism: int, sizes: Optional[list] = None) -> None:
         """Print the initial header line."""
@@ -365,6 +371,8 @@ class ParallelTTSStatus:
 
     def _render(self, done: bool = False) -> None:
         """Render the status line. Must be called with self._lock held."""
+        if self._muted:
+            return
         n = self._n
         icons = []
         for i in range(n):
@@ -889,11 +897,14 @@ class GeminiLiveAPI:
         results_lock = threading.Lock()
         done_queue: queue.Queue = queue.Queue()
         work_queue: queue.Queue = queue.Queue()
+        cancel_event = threading.Event()
         for i in range(n):
             work_queue.put(i)
 
         def worker() -> None:
             while True:
+                if cancel_event.is_set():
+                    return
                 try:
                     idx = work_queue.get_nowait()
                 except queue.Empty:
@@ -902,6 +913,8 @@ class GeminiLiveAPI:
                 try:
                     sentence = sentences[idx]
                     for attempt in range(1, max_retries + 1):
+                        if cancel_event.is_set():
+                            break
                         try:
                             wav = self.synthesize_wav(
                                 sentence,
@@ -920,11 +933,11 @@ class GeminiLiveAPI:
                                 status.set_message(f"chunk {idx + 1}: {err_msg}")
                                 break
                             status.set_message(f"chunk {idx + 1}: {err_msg}. Retrying in {delay:.0f}s")
-                            time.sleep(delay)
+                            cancel_event.wait(timeout=delay)
                             continue
                         if not wav and attempt < max_retries:
                             status.set_message(f"chunk {idx + 1}: no audio, retrying ({attempt + 1}/{max_retries}) in {retry_delay:.0f}s")
-                            time.sleep(retry_delay)
+                            cancel_event.wait(timeout=retry_delay)
                     with results_lock:
                         results[idx] = wav
                     status.mark_received(idx, self.last_delivery_mode if wav else None)
@@ -947,47 +960,51 @@ class GeminiLiveAPI:
         play_deadline: Optional[float] = None  # wall-clock deadline for next chunk
         pcm_parts: list = [] if output_path is not None else None  # type: ignore[assignment]
 
-        while next_idx < n:
-            # Compute remaining time before we give up waiting
-            if play_deadline is not None:
-                remaining = play_deadline - time.monotonic()
-                if remaining <= 0:
-                    status.set_message(f"Playback timed out")
-                    break
-                wait = min(remaining, 1.0)
-            else:
-                wait = 120
+        try:
+            while next_idx < n:
+                # Compute remaining time before we give up waiting
+                if play_deadline is not None:
+                    remaining = play_deadline - time.monotonic()
+                    if remaining <= 0:
+                        status.set_message(f"Playback timed out")
+                        break
+                    wait = min(remaining, 1.0)
+                else:
+                    wait = 120
 
-            try:
-                done_queue.get(timeout=wait)
-            except queue.Empty:
-                if play_deadline is not None and time.monotonic() >= play_deadline:
-                    status.set_message(f"Playback timed out")
-                    break
-                if play_deadline is None:
-                    status.set_message("timed out waiting for chunk — thread may be hung")
-                    break
-                continue  # deadline not reached yet, keep waiting
+                try:
+                    done_queue.get(timeout=wait)
+                except queue.Empty:
+                    if play_deadline is not None and time.monotonic() >= play_deadline:
+                        status.set_message(f"Playback timed out")
+                        break
+                    if play_deadline is None:
+                        status.set_message("timed out waiting for chunk — thread may be hung")
+                        break
+                    continue  # deadline not reached yet, keep waiting
 
-            with results_lock:
-                while next_idx < n and next_idx in results:
-                    chunk = results.pop(next_idx)
-                    play_idx = next_idx
-                    next_idx += 1
-                    if chunk:
-                        play_buffer.append((play_idx, chunk))
+                with results_lock:
+                    while next_idx < n and next_idx in results:
+                        chunk = results.pop(next_idx)
+                        play_idx = next_idx
+                        next_idx += 1
+                        if chunk:
+                            play_buffer.append((play_idx, chunk))
 
-            while play_buffer:
-                play_idx, chunk = play_buffer.pop(0)
-                play_deadline = None  # reset: we have something to play
-                status.mark_playing(play_idx)
-                if pcm_parts is not None:
-                    pcm_parts.append(chunk[WAV_HEADER_SIZE:])
-                yield chunk
-                status.mark_played()
-                # Start the deadline clock after each chunk finishes playing
-                if next_idx < n:
-                    play_deadline = time.monotonic() + chunk_timeout
+                while play_buffer:
+                    play_idx, chunk = play_buffer.pop(0)
+                    play_deadline = None  # reset: we have something to play
+                    status.mark_playing(play_idx)
+                    if pcm_parts is not None:
+                        pcm_parts.append(chunk[WAV_HEADER_SIZE:])
+                    yield chunk
+                    status.mark_played()
+                    # Start the deadline clock after each chunk finishes playing
+                    if next_idx < n:
+                        play_deadline = time.monotonic() + chunk_timeout
+        finally:
+            cancel_event.set()
+            status.mute()
 
         status.finish()
 
@@ -1093,12 +1110,19 @@ class GeminiLiveAPI:
         sem = asyncio.Semaphore(parallelism)
         done_queue: asyncio.Queue = asyncio.Queue()
         results: Dict[int, Optional[bytes]] = {}
+        cancel_event = threading.Event()
+
+        async def _cancel_aware_sleep(seconds: float) -> None:
+            """Sleep for up to `seconds`, waking early if cancel_event is set."""
+            await loop.run_in_executor(None, lambda: cancel_event.wait(timeout=seconds))
 
         async def synthesize_one(idx: int) -> None:
             async with sem:
                 wav = None
                 try:
                     for attempt in range(1, max_retries + 1):
+                        if cancel_event.is_set():
+                            break
                         try:
                             wav = await loop.run_in_executor(
                                 None,
@@ -1120,11 +1144,11 @@ class GeminiLiveAPI:
                                 status.set_message(f"chunk {idx + 1}: {err_msg}")
                                 break
                             status.set_message(f"chunk {idx + 1}: {err_msg}. Retrying in {delay:.0f}s")
-                            await asyncio.sleep(delay)
+                            await _cancel_aware_sleep(delay)
                             continue
                         if not wav and attempt < max_retries:
                             status.set_message(f"chunk {idx + 1}: no audio, retrying ({attempt + 1}/{max_retries}) in {retry_delay:.0f}s")
-                            await asyncio.sleep(retry_delay)
+                            await _cancel_aware_sleep(retry_delay)
                     results[idx] = wav
                     status.mark_received(idx, self.last_delivery_mode if wav else None)
                     if not wav:
@@ -1183,6 +1207,8 @@ class GeminiLiveAPI:
                     if next_idx < n:
                         play_deadline = time.monotonic() + chunk_timeout
         finally:
+            cancel_event.set()
+            status.mute()
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
