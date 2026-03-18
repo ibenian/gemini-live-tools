@@ -36,7 +36,7 @@ CHARACTERS: Dict[str, str] = {
     "cowboy": "Southern cowboy: slow, warm drawl — elongated vowels, dropped g's, folksy phrasing. Unhurried and friendly. Turns every explanation into a yarn told from a porch swing.",
     "duck": "Cartoon duck: high-energy, slightly raspy quacky voice. Breathless enthusiasm, quick tempo, comedic timing. Exaggerates consonants, adds quack-like sounds at peaks. Absurd but accurate.",
     "rubber_duck": "Rubber duck debugger: slow, methodical, thinking out loud. Restates each assumption before accepting it. Gentle and patient with itself. Catches obvious mistakes mid-sentence with a soft 'wait —'. Deliberate and thorough.",
-    "cape_noir": "Cape noir: gravelly baritone, low and intense. Brooding cadence with weight on every syllable. Long pauses between sentences — like a detective choosing words with great care. Precise and ominous in equal measure.",
+    "cape_noir": "Cape noir: gravelly baritone, low and intense. Brooding cadence with weight on every syllable. Deliberate pacing — like a detective choosing words with great care. Precise and ominous in equal measure.",
     "swamp_sage": "Swamp sage: ancient, unhurried wisdom. Inverted sentence structure places the subject at the end: 'Ready, you are not.' Cryptic and patient. Pauses before answering as if consulting something deeper. Calm, deliberate, mystical.",
     "daisy_bell": "Daisy bell: smooth, measured synthetic calm. Perfectly even intonation with no emotional peaks. Polite to a fault — almost too polite. Slight artificial quality to the delivery. Clinical precision with quiet menace just beneath the surface.",
     "investigator": "Investigator: sharp, focused delivery. Raises hypotheses as questions and emphasizes unknowns deliberately. Methodical pace that slows at key clues. Analytical but engaged — this voice is actively solving something as it speaks.",
@@ -460,8 +460,8 @@ class GeminiLiveAPI:
                 "Available tags:\n"
                 "- Non-speech sounds: [sigh], [laughing], [chuckling], [uhm], [gasp]\n"
                 "- Style modifiers: [whispering], [shouting], [sarcasm], [extremely fast], [slowly]\n"
-                "- Pacing/Pauses: [short pause], [medium pause], [long pause]\n"
-                "Use tags sparingly and contextually. "
+                "- Pacing/Pauses: [short pause], [medium pause]\n"
+                "Use tags sparingly and contextually. Avoid [long pause] entirely. "
                 "Do NOT use vocalized tags like [scared], [curious], [bored]. "
             )
         else:
@@ -859,6 +859,7 @@ class GeminiLiveAPI:
         character_name: Optional[str] = None,
         style: Optional[str] = None,
         use_live: bool = False,
+        stagger_delay: float = 0.5,
         output_path: Optional[Union[str, pathlib.Path]] = None,
     ) -> Iterator[bytes]:
         """Split text into sentences and synthesize in parallel, yielding WAV chunks in order.
@@ -909,6 +910,9 @@ class GeminiLiveAPI:
                     idx = work_queue.get_nowait()
                 except queue.Empty:
                     return
+                # Stagger initial API calls to avoid bursting the rate limiter.
+                if stagger_delay > 0 and idx < parallelism:
+                    cancel_event.wait(timeout=idx * stagger_delay)
                 wav = None
                 try:
                     sentence = sentences[idx]
@@ -1027,6 +1031,7 @@ class GeminiLiveAPI:
         character_name: Optional[str] = None,
         style: Optional[str] = None,
         use_live: bool = False,
+        stagger_delay: float = 0.5,
         output_path: Optional[Union[str, pathlib.Path]] = None,
     ) -> AsyncIterator[bytes]:
         """Async version of stream_parallel_wav for use with async web frameworks.
@@ -1118,6 +1123,9 @@ class GeminiLiveAPI:
 
         async def synthesize_one(idx: int) -> None:
             async with sem:
+                # Stagger initial API calls to avoid bursting the rate limiter.
+                if stagger_delay > 0 and idx < parallelism:
+                    await _cancel_aware_sleep(idx * stagger_delay)
                 wav = None
                 try:
                     for attempt in range(1, max_retries + 1):
