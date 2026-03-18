@@ -454,17 +454,7 @@ class GeminiLiveAPI:
 
         character_desc = self._resolve_character(character_name)
         style_clause = f" Additional style guidance: {style}" if style else ""
-        if self.markup_tags:
-            tag_clause = (
-                "You may insert Gemini TTS bracket markup tags to enhance the delivery. "
-                "Available tags:\n"
-                "- Non-speech sounds: [sigh], [laughing], [chuckling], [uhm], [gasp]\n"
-                "- Style modifiers: [whispering], [shouting], [sarcasm], [extremely fast], [slowly]\n"
-                "Use tags sparingly and contextually. Avoid all pause tags ([short pause], [medium pause], [long pause]). "
-                "Do NOT use vocalized tags like [scared], [curious], [bored]. "
-            )
-        else:
-            tag_clause = "Do not include any markup tags or parenthetical emotion cues. "
+        tag_clause = "Do not include any bracket markup tags or parenthetical emotion cues. "
 
         prompt = (
             f"You are: {character_desc} Speak entirely in this character's voice and style.\n"
@@ -683,8 +673,9 @@ class GeminiLiveAPI:
         text = re.sub(r'\*(.+?)\*', r'\1', text)
         text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
         text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
-        # Strip pause tags — they confuse TTS models and produce garbled output
-        text = re.sub(r'\[(?:short|medium|long) pause\]', '', text, flags=re.IGNORECASE)
+        # Strip all bracket TTS tags — they cause garbled/elongated output at tag
+        # boundaries; character style description handles pacing/delivery instead.
+        text = re.sub(r'\[[^\]]+\]', '', text)
         # Collapse whitespace
         text = re.sub(r'\s{2,}', ' ', text).strip()
         return text
