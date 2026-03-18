@@ -543,12 +543,18 @@ class GeminiLiveAPI:
             client = genai.Client(api_key=self.api_key)
             config = self._build_live_config(voice_name, character_name, style)
             clean_text = self._clean_for_tts(text)
+            sentence_count = len([s for s in re.split(r'(?<=[.!?])\s+', clean_text.strip()) if s.strip()])
+            user_text = (
+                f"Read aloud ALL {sentence_count} sentence(s) below, verbatim, in order. "
+                "Do not stop after the first sentence:\n"
+                f"{clean_text}"
+            )
             pcm_chunks = []
 
             async def _run_session() -> None:
                 async with client.aio.live.connect(model=self.live_model, config=config) as session:
                     await session.send_client_content(
-                        turns={"role": "user", "parts": [{"text": clean_text}]},
+                        turns={"role": "user", "parts": [{"text": user_text}]},
                         turn_complete=True,
                     )
                     async for response in session.receive():
@@ -735,11 +741,12 @@ class GeminiLiveAPI:
                 except Exception:
                     pass
                 clean_text = text if pre_cleaned else self._clean_for_tts(text)
+                sentence_count = len([s for s in re.split(r'(?<=[.!?])\s+', clean_text.strip()) if s.strip()])
                 payload = (
                     f"Character guidance: {self._resolve_character(character_name)}. "
                     + (f"Additional style guidance: {style}. " if style else "")
-                    + "Read aloud exactly the following text, verbatim, with no additions or commentary. "
-                    "Read all sentences fully and do not truncate:\n"
+                    + f"Read aloud ALL {sentence_count} sentence(s) in the text below, verbatim, in order. "
+                    "Do not stop after the first sentence. Do not add commentary. Read every sentence to the end:\n"
                     f"{clean_text}"
                 )
                 for attempt in range(1, max_attempts + 1):
