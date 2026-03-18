@@ -14,11 +14,15 @@ prepares it for TTS, and plays it aloud.
 Requires: GEMINI_API_KEY env var
 """
 
+import io
 import os
 import sys
 import argparse
-import tempfile
-import subprocess
+import threading
+import tty
+import termios
+import wave
+
 
 from simple_term_menu import TerminalMenu
 from google import genai
@@ -59,14 +63,59 @@ def generate_greeting(client, character: str, length: int = 100) -> str:
     return (response.text or "").strip()
 
 
-def play_wav(wav_bytes: bytes) -> None:
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-        f.write(wav_bytes)
-        path = f.name
+def watch_for_cancel(cancel_event: threading.Event) -> None:
+    """Background thread: set cancel_event when user presses 'q'."""
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
     try:
-        subprocess.run(["afplay", path], check=True)
+        tty.setcbreak(fd)
+        while not cancel_event.is_set():
+            ch = sys.stdin.read(1)
+            if ch.lower() == "q":
+                cancel_event.set()
+                print("\n  Cancelling...")
+                break
+    except Exception:
+        pass
     finally:
-        os.unlink(path)
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def warmup_audio(sample_rate: int = 24000) -> None:
+    """Prime the audio device at the target sample rate before real playback.
+
+    macOS Core Audio reconfigures the output device when a new sample rate is
+    requested, which takes ~50-200 ms.  During that window the first real chunk
+    stutters or sounds elongated.  Playing a short silent buffer here forces
+    Core Audio to finish the reconfiguration so the first real chunk plays
+    cleanly.
+    """
+    import numpy as np
+    import sounddevice as sd
+    sd.play(np.zeros(sample_rate // 10, dtype=np.int16), samplerate=sample_rate)
+    sd.wait()
+
+
+def play_wav(wav_bytes: bytes, cancel_event: threading.Event = None) -> None:
+    import numpy as np
+    import sounddevice as sd
+    with wave.open(io.BytesIO(wav_bytes)) as wf:
+        pcm = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
+        sample_rate = wf.getframerate()
+    # Apply short fade-in/fade-out (10 ms) to avoid clicks at chunk boundaries.
+    fade_samples = min(int(sample_rate * 0.010), len(pcm) // 4)
+    if fade_samples > 0:
+        fade = np.linspace(0, 1, fade_samples, dtype=np.float32)
+        pcm = pcm.astype(np.float32)
+        pcm[:fade_samples] *= fade
+        pcm[-fade_samples:] *= fade[::-1]
+        pcm = pcm.astype(np.int16)
+    sd.play(pcm, samplerate=sample_rate)
+    while sd.get_stream().active:
+        if cancel_event and cancel_event.is_set():
+            sd.stop()
+            return
+        sd.sleep(100)
 
 
 def main() -> None:
@@ -103,6 +152,10 @@ def main() -> None:
         "--live", action="store_true", default=False,
         help="Use Gemini Live API for synthesis (falls back to generate_content on failure)",
     )
+    parser.add_argument(
+        "--stagger-delay", type=float, default=0.5,
+        help="Seconds between initial parallel API calls to avoid rate limiter bursts (default 0.5)",
+    )
     args = parser.parse_args()
 
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -127,7 +180,15 @@ def main() -> None:
     prepared = api.prepare_text(greeting, character_name=character)
     print(f"\n  Prepared: \"{prepared}\"\n")
 
-    print("  Synthesizing audio...\n")
+    # Prime the audio device now so Core Audio finishes sample-rate
+    # reconfiguration before the first real chunk arrives.
+    warmup_audio()
+
+    print("  Synthesizing audio...  (press q to cancel)\n")
+
+    cancel_event = threading.Event()
+    watcher = threading.Thread(target=watch_for_cancel, args=(cancel_event,), daemon=True)
+    watcher.start()
 
     if args.parallelism == 1:
         wav = api.synthesize_wav(prepared, character_name=character, use_live=args.live)
@@ -138,8 +199,9 @@ def main() -> None:
             import pathlib
             pathlib.Path(args.output).write_bytes(wav)
             print(f"  Saved to {args.output}\n")
-        print("  Playing...\n")
-        play_wav(wav)
+        if not cancel_event.is_set():
+            print("  Playing...\n")
+            play_wav(wav, cancel_event)
     else:
         played = 0
         for chunk in api.stream_parallel_wav(
@@ -151,15 +213,20 @@ def main() -> None:
             chunk_timeout=args.chunk_timeout,
             character_name=character,
             use_live=args.live,
+            stagger_delay=args.stagger_delay,
             output_path=args.output,
         ):
+            if cancel_event.is_set():
+                break
             played += 1
-            play_wav(chunk)
+            play_wav(chunk, cancel_event)
         if not played:
             print("Error: no audio chunks returned.")
             sys.exit(1)
-        if args.output:
+        if args.output and not cancel_event.is_set():
             print(f"\n  Saved to {args.output}")
+
+    cancel_event.set()  # stop watcher if playback finished normally
 
 
 if __name__ == "__main__":

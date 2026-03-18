@@ -36,7 +36,7 @@ CHARACTERS: Dict[str, str] = {
     "cowboy": "Southern cowboy: slow, warm drawl — elongated vowels, dropped g's, folksy phrasing. Unhurried and friendly. Turns every explanation into a yarn told from a porch swing.",
     "duck": "Cartoon duck: high-energy, slightly raspy quacky voice. Breathless enthusiasm, quick tempo, comedic timing. Exaggerates consonants, adds quack-like sounds at peaks. Absurd but accurate.",
     "rubber_duck": "Rubber duck debugger: slow, methodical, thinking out loud. Restates each assumption before accepting it. Gentle and patient with itself. Catches obvious mistakes mid-sentence with a soft 'wait —'. Deliberate and thorough.",
-    "cape_noir": "Cape noir: gravelly baritone, low and intense. Brooding cadence with weight on every syllable. Long pauses between sentences — like a detective choosing words with great care. Precise and ominous in equal measure.",
+    "cape_noir": "Cape noir: gravelly baritone, low and intense. Speaks in complete sentences with a brooding, unhurried cadence — each sentence is a full thought, never a mere fragment. Chooses words with the precision of a detective building a case, weaving danger and observation into flowing prose. Ominous and atmospheric, but always grammatically complete.",
     "swamp_sage": "Swamp sage: ancient, unhurried wisdom. Inverted sentence structure places the subject at the end: 'Ready, you are not.' Cryptic and patient. Pauses before answering as if consulting something deeper. Calm, deliberate, mystical.",
     "daisy_bell": "Daisy bell: smooth, measured synthetic calm. Perfectly even intonation with no emotional peaks. Polite to a fault — almost too polite. Slight artificial quality to the delivery. Clinical precision with quiet menace just beneath the surface.",
     "investigator": "Investigator: sharp, focused delivery. Raises hypotheses as questions and emphasizes unknowns deliberately. Methodical pace that slows at key clues. Analytical but engaged — this voice is actively solving something as it speaks.",
@@ -57,7 +57,7 @@ CHARACTERS: Dict[str, str] = {
     "showman": "Showman: theatrical, expansive delivery. Builds to punchlines and relishes every explanation as a performance. Confident swagger, deliberate timing, occasional flourish. Entertains while remaining completely accurate.",
     "joker": "Joker: light, playful delivery with deadpan comic timing. Slips jokes between accurate content without disrupting the flow. Relaxed, quick — always with a slight grin in the voice.",
     "drama_queen": "Drama queen: maximum emotional range. Everything is either triumphant or catastrophic. Sweeping intonation, breathless exclamations, dramatic pauses before reveals. Accurate — but nothing is ever just 'fine'.",
-    "conspiracy": "Conspiracy theorist: hushed, urgent, slightly paranoid cadence. Speaks as if being overheard. Exaggerates hidden causes with theatrical suspicion — then snaps back to plain facts with jarring normalcy.",
+    "conspiracy": "Conspiracy theorist: hushed, urgent, slightly paranoid cadence — speaks in complete, flowing sentences as if carefully laying out a case to someone who doesn't yet see the truth. Weaves hidden causes and theatrical suspicion into full thoughts, occasionally snapping back to plain facts with jarring normalcy. Never fragments. Always connects the dots out loud.",
     "news_anchor": "Breaking news anchor: urgent, clipped broadcast cadence. Treats every bug like a live catastrophe. Tight pacing, hard emphasis on key words. Authoritative and alarming — this is not a drill.",
     "kids_tv": "Kids TV host: warm, high-energy, sing-song delivery. Simple vocabulary, short sentences, dramatic enthusiasm for every step. Speaks slowly enough for everyone to follow but keeps the energy absolutely electric.",
     "heartland": "Heartland: warm, unhurried Midwestern politeness. Softens every critique with reassurance. Never rushes, never harsh. 'You know, that's a great question and I think what we're seeing here is...' Genuine, careful, and kind.",
@@ -314,9 +314,15 @@ class ParallelTTSStatus:
         self._received = 0
         self._played = 0
         self._message = ""
+        self._muted = False
         self._lock = threading.Lock()
 
-    def start(self, parallelism: int, sizes: Optional[list] = None) -> None:
+    def mute(self) -> None:
+        """Suppress all further status renders."""
+        with self._lock:
+            self._muted = True
+
+    def start(self, parallelism: int, sizes: Optional[list] = None, sentences: Optional[list] = None) -> None:
         """Print the initial header line."""
         if sizes:
             size_str = ", ".join(str(s) for s in sizes)
@@ -324,6 +330,17 @@ class ParallelTTSStatus:
         else:
             chunks_info = f"{self._n} chunks"
         print(f"[TTS-Parallel] {chunks_info}, parallelism={parallelism}")
+        if sentences:
+            offset = 0
+            for i, s in enumerate(sentences):
+                flat = s.replace('\n', ' ')
+                if len(flat) <= 80:
+                    preview = flat
+                else:
+                    half = 37
+                    preview = flat[:half] + "....." + flat[-half:]
+                print(f"  [{i}] chars {offset}..{offset + len(s)} \"{preview}\"")
+                offset += len(s) + 1
 
     def mark_received(self, idx: int, delivery_mode: Optional[str]) -> None:
         """Record that chunk `idx` has been synthesized.
@@ -365,6 +382,8 @@ class ParallelTTSStatus:
 
     def _render(self, done: bool = False) -> None:
         """Render the status line. Must be called with self._lock held."""
+        if self._muted:
+            return
         n = self._n
         icons = []
         for i in range(n):
@@ -419,13 +438,29 @@ class GeminiLiveAPI:
             return CHARACTER_DEFAULT_VOICES[character_name]
         return DEFAULT_VOICE
 
+    @staticmethod
+    def _build_reading_prompt(clean_text: str) -> str:
+        """Wrap clean_text in a prompt that prevents the model from stopping early.
+
+        The model tends to treat the first sentence-ending period as a natural
+        stop point.  Framing the input as a multi-sentence passage to be read
+        straight through — with an explicit sentence count and a continuation
+        instruction — significantly reduces early truncation.
+        """
+        sentences = [s for s in re.split(r'(?<=[.!?])\s+', clean_text.strip()) if s.strip()]
+        n = len(sentences)
+        return (
+            f"Read the following passage aloud, word for word, from the first word "
+            f"to the last. It contains {n} sentence(s). After each sentence, "
+            f"continue immediately to the next without stopping. "
+            f"Do not stop until you have read every sentence:\n\n{clean_text}"
+        )
+
     def _tts_system_instruction(self, character_name: Optional[str], style: Optional[str]) -> str:
         instruction = (
-            "You are a text-to-speech renderer. Read the provided text aloud verbatim. "
-            "Honor any bracket markup tags like [sigh], [laughing], [whispering], [short pause], etc. "
-            "Do not speak the tags themselves; perform them as directed. "
-            "Do not add any extra words, prefaces, or commentary. "
-            "Read the complete input, including all sentences, and do not truncate."
+            "You are a text-to-speech renderer. Read the provided passage aloud verbatim, "
+            "word for word, from start to finish. Do not stop early, do not paraphrase, "
+            "do not add commentary."
         )
         character_desc = self._resolve_character(character_name)
         if character_desc:
@@ -446,18 +481,7 @@ class GeminiLiveAPI:
 
         character_desc = self._resolve_character(character_name)
         style_clause = f" Additional style guidance: {style}" if style else ""
-        if self.markup_tags:
-            tag_clause = (
-                "You may insert Gemini TTS bracket markup tags to enhance the delivery. "
-                "Available tags:\n"
-                "- Non-speech sounds: [sigh], [laughing], [chuckling], [uhm], [gasp]\n"
-                "- Style modifiers: [whispering], [shouting], [sarcasm], [extremely fast], [slowly]\n"
-                "- Pacing/Pauses: [short pause], [medium pause], [long pause]\n"
-                "Use tags sparingly and contextually. "
-                "Do NOT use vocalized tags like [scared], [curious], [bored]. "
-            )
-        else:
-            tag_clause = "Do not include any markup tags or parenthetical emotion cues. "
+        tag_clause = "Do not include any bracket markup tags or parenthetical emotion cues. "
 
         prompt = (
             f"You are: {character_desc} Speak entirely in this character's voice and style.\n"
@@ -535,20 +559,25 @@ class GeminiLiveAPI:
             client = genai.Client(api_key=self.api_key)
             config = self._build_live_config(voice_name, character_name, style)
             clean_text = self._clean_for_tts(text)
+            user_text = self._build_reading_prompt(clean_text)
             pcm_chunks = []
 
             async def _run_session() -> None:
                 async with client.aio.live.connect(model=self.live_model, config=config) as session:
                     await session.send_client_content(
-                        turns={"role": "user", "parts": [{"text": clean_text}]},
+                        turns={"role": "user", "parts": [{"text": user_text}]},
                         turn_complete=True,
                     )
                     async for response in session.receive():
-                        if response.data:
-                            pcm_chunks.append(response.data)
                         server_content = getattr(response, "server_content", None)
-                        if server_content and getattr(server_content, "turn_complete", False):
-                            break
+                        if server_content:
+                            model_turn = getattr(server_content, "model_turn", None)
+                            for part in (getattr(model_turn, "parts", None) or []):
+                                inline = getattr(part, "inline_data", None)
+                                if inline and getattr(inline, "data", None):
+                                    pcm_chunks.append(inline.data)
+                            if getattr(server_content, "turn_complete", False):
+                                break
 
             await asyncio.wait_for(_run_session(), timeout=timeout)
             if not pcm_chunks:
@@ -676,6 +705,9 @@ class GeminiLiveAPI:
         text = re.sub(r'\*(.+?)\*', r'\1', text)
         text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
         text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+        # Strip all bracket TTS tags — they cause garbled/elongated output at tag
+        # boundaries; character style description handles pacing/delivery instead.
+        text = re.sub(r'\[[^\]]+\]', '', text)
         # Collapse whitespace
         text = re.sub(r'\s{2,}', ' ', text).strip()
         return text
@@ -723,9 +755,7 @@ class GeminiLiveAPI:
                 payload = (
                     f"Character guidance: {self._resolve_character(character_name)}. "
                     + (f"Additional style guidance: {style}. " if style else "")
-                    + "Read aloud exactly the following text, verbatim, with no additions or commentary. "
-                    "Read all sentences fully and do not truncate:\n"
-                    f"{clean_text}"
+                    + self._build_reading_prompt(clean_text)
                 )
                 for attempt in range(1, max_attempts + 1):
                     try:
@@ -851,6 +881,7 @@ class GeminiLiveAPI:
         character_name: Optional[str] = None,
         style: Optional[str] = None,
         use_live: bool = False,
+        stagger_delay: float = 0.5,
         output_path: Optional[Union[str, pathlib.Path]] = None,
     ) -> Iterator[bytes]:
         """Split text into sentences and synthesize in parallel, yielding WAV chunks in order.
@@ -883,25 +914,33 @@ class GeminiLiveAPI:
         WAV_HEADER_SIZE = 44
 
         status = ParallelTTSStatus(n)
-        status.start(parallelism, sizes=[len(s) for s in sentences])
+        status.start(parallelism, sizes=[len(s) for s in sentences], sentences=sentences)
 
         results: Dict[int, Optional[bytes]] = {}
         results_lock = threading.Lock()
         done_queue: queue.Queue = queue.Queue()
         work_queue: queue.Queue = queue.Queue()
+        cancel_event = threading.Event()
         for i in range(n):
             work_queue.put(i)
 
         def worker() -> None:
             while True:
+                if cancel_event.is_set():
+                    return
                 try:
                     idx = work_queue.get_nowait()
                 except queue.Empty:
                     return
+                # Stagger initial API calls to avoid bursting the rate limiter.
+                if stagger_delay > 0 and idx < parallelism:
+                    cancel_event.wait(timeout=idx * stagger_delay)
                 wav = None
                 try:
                     sentence = sentences[idx]
                     for attempt in range(1, max_retries + 1):
+                        if cancel_event.is_set():
+                            break
                         try:
                             wav = self.synthesize_wav(
                                 sentence,
@@ -920,11 +959,11 @@ class GeminiLiveAPI:
                                 status.set_message(f"chunk {idx + 1}: {err_msg}")
                                 break
                             status.set_message(f"chunk {idx + 1}: {err_msg}. Retrying in {delay:.0f}s")
-                            time.sleep(delay)
+                            cancel_event.wait(timeout=delay)
                             continue
                         if not wav and attempt < max_retries:
                             status.set_message(f"chunk {idx + 1}: no audio, retrying ({attempt + 1}/{max_retries}) in {retry_delay:.0f}s")
-                            time.sleep(retry_delay)
+                            cancel_event.wait(timeout=retry_delay)
                     with results_lock:
                         results[idx] = wav
                     status.mark_received(idx, self.last_delivery_mode if wav else None)
@@ -947,47 +986,51 @@ class GeminiLiveAPI:
         play_deadline: Optional[float] = None  # wall-clock deadline for next chunk
         pcm_parts: list = [] if output_path is not None else None  # type: ignore[assignment]
 
-        while next_idx < n:
-            # Compute remaining time before we give up waiting
-            if play_deadline is not None:
-                remaining = play_deadline - time.monotonic()
-                if remaining <= 0:
-                    status.set_message(f"Playback timed out")
-                    break
-                wait = min(remaining, 1.0)
-            else:
-                wait = 120
+        try:
+            while next_idx < n:
+                # Compute remaining time before we give up waiting
+                if play_deadline is not None:
+                    remaining = play_deadline - time.monotonic()
+                    if remaining <= 0:
+                        status.set_message(f"Playback timed out")
+                        break
+                    wait = min(remaining, 1.0)
+                else:
+                    wait = 120
 
-            try:
-                done_queue.get(timeout=wait)
-            except queue.Empty:
-                if play_deadline is not None and time.monotonic() >= play_deadline:
-                    status.set_message(f"Playback timed out")
-                    break
-                if play_deadline is None:
-                    status.set_message("timed out waiting for chunk — thread may be hung")
-                    break
-                continue  # deadline not reached yet, keep waiting
+                try:
+                    done_queue.get(timeout=wait)
+                except queue.Empty:
+                    if play_deadline is not None and time.monotonic() >= play_deadline:
+                        status.set_message(f"Playback timed out")
+                        break
+                    if play_deadline is None:
+                        status.set_message("timed out waiting for chunk — thread may be hung")
+                        break
+                    continue  # deadline not reached yet, keep waiting
 
-            with results_lock:
-                while next_idx < n and next_idx in results:
-                    chunk = results.pop(next_idx)
-                    play_idx = next_idx
-                    next_idx += 1
-                    if chunk:
-                        play_buffer.append((play_idx, chunk))
+                with results_lock:
+                    while next_idx < n and next_idx in results:
+                        chunk = results.pop(next_idx)
+                        play_idx = next_idx
+                        next_idx += 1
+                        if chunk:
+                            play_buffer.append((play_idx, chunk))
 
-            while play_buffer:
-                play_idx, chunk = play_buffer.pop(0)
-                play_deadline = None  # reset: we have something to play
-                status.mark_playing(play_idx)
-                if pcm_parts is not None:
-                    pcm_parts.append(chunk[WAV_HEADER_SIZE:])
-                yield chunk
-                status.mark_played()
-                # Start the deadline clock after each chunk finishes playing
-                if next_idx < n:
-                    play_deadline = time.monotonic() + chunk_timeout
+                while play_buffer:
+                    play_idx, chunk = play_buffer.pop(0)
+                    play_deadline = None  # reset: we have something to play
+                    status.mark_playing(play_idx)
+                    if pcm_parts is not None:
+                        pcm_parts.append(chunk[WAV_HEADER_SIZE:])
+                    yield chunk
+                    status.mark_played()
+                    # Start the deadline clock after each chunk finishes playing
+                    if next_idx < n:
+                        play_deadline = time.monotonic() + chunk_timeout
+        finally:
+            cancel_event.set()
+            status.mute()
 
         status.finish()
 
@@ -1010,6 +1053,7 @@ class GeminiLiveAPI:
         character_name: Optional[str] = None,
         style: Optional[str] = None,
         use_live: bool = False,
+        stagger_delay: float = 0.5,
         output_path: Optional[Union[str, pathlib.Path]] = None,
     ) -> AsyncIterator[bytes]:
         """Async version of stream_parallel_wav for use with async web frameworks.
@@ -1087,18 +1131,28 @@ class GeminiLiveAPI:
         WAV_HEADER_SIZE = 44
 
         status = ParallelTTSStatus(n)
-        status.start(parallelism, sizes=[len(s) for s in sentences])
+        status.start(parallelism, sizes=[len(s) for s in sentences], sentences=sentences)
 
         loop = asyncio.get_event_loop()
         sem = asyncio.Semaphore(parallelism)
         done_queue: asyncio.Queue = asyncio.Queue()
         results: Dict[int, Optional[bytes]] = {}
+        cancel_event = threading.Event()
+
+        async def _cancel_aware_sleep(seconds: float) -> None:
+            """Sleep for up to `seconds`, waking early if cancel_event is set."""
+            await loop.run_in_executor(None, lambda: cancel_event.wait(timeout=seconds))
 
         async def synthesize_one(idx: int) -> None:
             async with sem:
+                # Stagger initial API calls to avoid bursting the rate limiter.
+                if stagger_delay > 0 and idx < parallelism:
+                    await _cancel_aware_sleep(idx * stagger_delay)
                 wav = None
                 try:
                     for attempt in range(1, max_retries + 1):
+                        if cancel_event.is_set():
+                            break
                         try:
                             wav = await loop.run_in_executor(
                                 None,
@@ -1120,11 +1174,11 @@ class GeminiLiveAPI:
                                 status.set_message(f"chunk {idx + 1}: {err_msg}")
                                 break
                             status.set_message(f"chunk {idx + 1}: {err_msg}. Retrying in {delay:.0f}s")
-                            await asyncio.sleep(delay)
+                            await _cancel_aware_sleep(delay)
                             continue
                         if not wav and attempt < max_retries:
                             status.set_message(f"chunk {idx + 1}: no audio, retrying ({attempt + 1}/{max_retries}) in {retry_delay:.0f}s")
-                            await asyncio.sleep(retry_delay)
+                            await _cancel_aware_sleep(retry_delay)
                     results[idx] = wav
                     status.mark_received(idx, self.last_delivery_mode if wav else None)
                     if not wav:
@@ -1183,6 +1237,8 @@ class GeminiLiveAPI:
                     if next_idx < n:
                         play_deadline = time.monotonic() + chunk_timeout
         finally:
+            cancel_event.set()
+            status.mute()
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
