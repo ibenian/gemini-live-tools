@@ -152,6 +152,10 @@ def main() -> None:
         "--live", action="store_true", default=False,
         help="Use Gemini Live API for synthesis (falls back to generate_content on failure)",
     )
+    parser.add_argument(
+        "--stagger-delay", type=float, default=0.5,
+        help="Seconds between initial parallel API calls to avoid rate limiter bursts (default 0.5)",
+    )
     args = parser.parse_args()
 
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -209,6 +213,7 @@ def main() -> None:
             chunk_timeout=args.chunk_timeout,
             character_name=character,
             use_live=args.live,
+            stagger_delay=args.stagger_delay,
             output_path=args.output,
         ):
             if cancel_event.is_set():
