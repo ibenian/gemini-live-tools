@@ -552,11 +552,15 @@ class GeminiLiveAPI:
                         turn_complete=True,
                     )
                     async for response in session.receive():
-                        if response.data:
-                            pcm_chunks.append(response.data)
                         server_content = getattr(response, "server_content", None)
-                        if server_content and getattr(server_content, "turn_complete", False):
-                            break
+                        if server_content:
+                            model_turn = getattr(server_content, "model_turn", None)
+                            for part in (getattr(model_turn, "parts", None) or []):
+                                inline = getattr(part, "inline_data", None)
+                                if inline and getattr(inline, "data", None):
+                                    pcm_chunks.append(inline.data)
+                            if getattr(server_content, "turn_complete", False):
+                                break
 
             await asyncio.wait_for(_run_session(), timeout=timeout)
             if not pcm_chunks:
