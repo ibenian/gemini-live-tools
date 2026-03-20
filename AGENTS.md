@@ -54,6 +54,8 @@ CONTRIBUTING.md           How to add voice characters
 - **Sentence boundaries**: `[long pause]` and `[medium pause]` tags split sentences in `_split_sentences`. The tag is kept at the start of the next chunk.
 - **Quota awareness**: each sentence = one Gemini API request. Avoid very small `min_sentence_chars` in production (free tier is 100 req/day).
 - **`.venv` is local** — recreate with `./gstts.sh setup` if broken.
+- **Always label PRs** — add appropriate labels (e.g. `enhancement`, `bug`, `docs`) when creating PRs, same as you would for issues.
+- **Use `--admin` when merging PRs** — branch protection requires it: `gh pr merge <number> --squash --delete-branch --admin`.
 
 ## Release Flow
 
