@@ -29,6 +29,15 @@ from simple_term_menu import TerminalMenu
 from google import genai
 
 from gemini_live_tools import GeminiLiveAPI, CHARACTERS
+from gemini_live_tools.gemini_live_api import CHARACTER_DEFAULT_VOICES
+
+GEMINI_VOICES = [
+    'Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Leda', 'Orus', 'Aoede',
+    'Callirrhoe', 'Autonoe', 'Enceladus', 'Iapetus', 'Umbriel', 'Algieba',
+    'Despina', 'Erinome', 'Algenib', 'Rasalgethi', 'Laomedeia', 'Achernar',
+    'Alnilam', 'Schedar', 'Gacrux', 'Pulcherrima', 'Achird', 'Zubenelgenubi',
+    'Vindemiatrix', 'Sadachbia', 'Sadaltager', 'Sulafat',
+]
 
 CONFIG_PATH = os.path.expanduser("~/gstts_config.json")
 
@@ -145,6 +154,30 @@ def main() -> None:
         help="Text to read aloud (skip greeting generation)",
     )
     parser.add_argument(
+        "--character", "-c", type=str, default=None,
+        help="Character name (skip interactive picker)",
+    )
+    parser.add_argument(
+        "--list-characters", "-lc", action="store_true",
+        help="List available characters and exit",
+    )
+    parser.add_argument(
+        "--voice", "-v", type=str, default=None,
+        help="Gemini voice name (overrides character default voice)",
+    )
+    parser.add_argument(
+        "--list-voices", "-lv", action="store_true",
+        help="List available Gemini voices and exit",
+    )
+    parser.add_argument(
+        "--style", "-s", type=str, default=None,
+        help="Additional style instruction for TTS",
+    )
+    parser.add_argument(
+        "--prepare", "--perform", "-p", action="store_true", default=False,
+        help="Run prepare_text on input before synthesis (rewrite for speech-friendly form)",
+    )
+    parser.add_argument(
         "--parallelism", type=int, default=3,
         help="1 = sequential, N > 1 = parallel TTS with N threads (default 3)",
     )
@@ -187,6 +220,19 @@ def main() -> None:
     args = parser.parse_args()
     debug = args.debug
 
+    # List commands — no API key needed
+    if args.list_characters:
+        for name in sorted(CHARACTERS.keys()):
+            voice = CHARACTER_DEFAULT_VOICES.get(name, "")
+            desc = CHARACTERS[name].split('.')[0].split('—')[0].strip()
+            print(f"  {name:<22} voice={voice:<12} {desc}")
+        sys.exit(0)
+
+    if args.list_voices:
+        for voice in GEMINI_VOICES:
+            print(f"  {voice}")
+        sys.exit(0)
+
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         print("Error: GEMINI_API_KEY environment variable is not set.")
@@ -195,25 +241,41 @@ def main() -> None:
     config = load_config()
     mode = "sequential" if args.parallelism == 1 else f"parallel (x{args.parallelism})"
 
+    # Resolve character: --character flag > config > interactive picker
     picked_from_menu = False
-    if args.text and config.get("character"):
+    if args.character:
+        character = args.character
+        if character not in CHARACTERS:
+            print(f"Error: unknown character \"{character}\". Use --list-characters to see options.")
+            sys.exit(1)
+    elif args.text and config.get("character"):
         character = config["character"]
-        print(f"\n→ Character:  {character}")
-        if debug:
-            print(f"→ Config:     {CONFIG_PATH}")
-            print(f"→ Mode:       {mode}")
     else:
         character = pick_character()
         picked_from_menu = True
-        print(f"\n→ Character:  {character}")
-        if debug:
-            print(f"→ Mode:       {mode}")
+
+    voice = args.voice or CHARACTER_DEFAULT_VOICES.get(character, "Kore")
+    print(f"\n→ Character:  {character}")
+    print(f"→ Voice:      {voice}")
+    if args.style:
+        print(f"→ Style:      {args.style}")
+    if debug:
+        print(f"→ Config:     {CONFIG_PATH}")
+        print(f"→ Mode:       {mode}")
 
     client = genai.Client(api_key=api_key)
     api = GeminiLiveAPI(api_key=api_key, client=client)
 
     if args.text:
-        prepared = args.text
+        if args.prepare:
+            print("→ Prepare:    on (rewriting text for speech)")
+            if debug:
+                print("\n  Preparing for TTS...")
+            prepared = api.prepare_text(args.text, character_name=character, style=args.style)
+            if debug:
+                print(f"\n  Prepared: \"{prepared}\"\n")
+        else:
+            prepared = args.text
         if debug:
             print(f"\n  \"{prepared}\"\n")
     else:
@@ -223,7 +285,7 @@ def main() -> None:
 
         if debug:
             print("  Preparing for TTS...")
-        prepared = api.prepare_text(greeting, character_name=character)
+        prepared = api.prepare_text(greeting, character_name=character, style=args.style)
         if debug:
             print(f"\n  Prepared: \"{prepared}\"\n")
 
@@ -241,7 +303,7 @@ def main() -> None:
     watcher.start()
 
     if args.parallelism == 1:
-        wav = api.synthesize_wav(prepared, character_name=character, use_live=args.live)
+        wav = api.synthesize_wav(prepared, character_name=character, voice_name=args.voice, style=args.style, use_live=args.live)
         if not wav:
             print(f"Error: synthesis failed — {api.last_error}")
             sys.exit(1)
@@ -263,6 +325,8 @@ def main() -> None:
             min_buffer_seconds=args.min_buffer_seconds,
             chunk_timeout=args.chunk_timeout,
             character_name=character,
+            voice_name=args.voice,
+            style=args.style,
             use_live=args.live,
             stagger_delay=args.stagger_delay,
             output_path=args.output,
