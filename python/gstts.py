@@ -40,6 +40,12 @@ def load_config() -> dict:
     return {}
 
 
+def save_config(config: dict) -> None:
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(config, f, indent=2)
+        f.write("\n")
+
+
 def pick_character() -> str:
     names = sorted(CHARACTERS.keys())
     entries = [
@@ -75,13 +81,17 @@ def generate_greeting(client, character: str, length: int = 100) -> str:
 
 def watch_for_cancel(cancel_event: threading.Event) -> None:
     """Background thread: set cancel_event when user presses 'q'."""
+    import select
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     try:
         tty.setcbreak(fd)
         while not cancel_event.is_set():
-            ch = sys.stdin.read(1)
-            if ch.lower() == "q":
+            ready, _, _ = select.select([fd], [], [], 0.2)
+            if not ready:
+                continue
+            ch = os.read(fd, 1)
+            if ch.lower() == b"q":
                 cancel_event.set()
                 print("\n  Cancelling...")
                 break
@@ -163,8 +173,8 @@ def main() -> None:
         help="If set, merge all chunks and write the complete WAV file to this path",
     )
     parser.add_argument(
-        "--live", action="store_true", default=False,
-        help="Use Gemini Live API for synthesis (falls back to generate_content on failure)",
+        "--live", action="store_true", default=True,
+        help="Use Gemini Live API for synthesis (falls back to generate_content on failure, default: on)",
     )
     parser.add_argument(
         "--stagger-delay", type=float, default=0.5,
@@ -180,6 +190,7 @@ def main() -> None:
     config = load_config()
     mode = "sequential" if args.parallelism == 1 else f"parallel (x{args.parallelism})"
 
+    picked_from_menu = False
     if args.text and config.get("character"):
         character = config["character"]
         print(f"\n→ Config:     {CONFIG_PATH}")
@@ -187,6 +198,7 @@ def main() -> None:
         print(f"→ Mode:       {mode}")
     else:
         character = pick_character()
+        picked_from_menu = True
         print(f"\n→ Character:  {character}")
         print(f"→ Mode:       {mode}")
 
@@ -252,6 +264,14 @@ def main() -> None:
             print(f"\n  Saved to {args.output}")
 
     cancel_event.set()  # stop watcher if playback finished normally
+    watcher.join(timeout=1)  # wait for terminal to be restored
+
+    if picked_from_menu and character != config.get("character"):
+        answer = input(f"\n  Save \"{character}\" as default character? [y/N] ").strip().lower()
+        if answer in ("y", "yes"):
+            config["character"] = character
+            save_config(config)
+            print(f"  Saved to {CONFIG_PATH}")
 
 
 if __name__ == "__main__":
