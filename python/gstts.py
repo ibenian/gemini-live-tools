@@ -55,7 +55,11 @@ def save_config(config: dict) -> None:
         f.write("\n")
 
 
-def pick_character() -> str:
+def pick_character():
+    """Pick a character interactively. Returns (name, quick_select).
+
+    Enter = normal select, Space = quick select (save to config, skip TTS).
+    """
     names = sorted(CHARACTERS.keys())
     entries = [
         f"{name:<22} {CHARACTERS[name].split('.')[0].split('—')[0].strip()}"
@@ -63,14 +67,16 @@ def pick_character() -> str:
     ]
     menu = TerminalMenu(
         entries,
-        title="Pick a character (↑↓ / PgUp PgDn / press / to search):",
+        title="Pick a character (Enter=select, Space=set default, /=search):",
         search_key="/",
         show_search_hint=True,
+        accept_keys=("enter", " "),
     )
     idx = menu.show()
     if idx is None:
         sys.exit(0)
-    return names[idx]
+    quick_select = menu.chosen_accept_key == " "
+    return names[idx], quick_select
 
 
 def generate_greeting(client, character: str, length: int = 100) -> str:
@@ -243,6 +249,7 @@ def main() -> None:
 
     # Resolve character: --character flag > config > interactive picker
     picked_from_menu = False
+    quick_select = False
     if args.character:
         character = args.character
         if character not in CHARACTERS:
@@ -251,12 +258,18 @@ def main() -> None:
     elif args.text and config.get("character"):
         character = config["character"]
     else:
-        character = pick_character()
+        character, quick_select = pick_character()
         picked_from_menu = True
 
     voice = args.voice or CHARACTER_DEFAULT_VOICES.get(character, "Kore")
     print(f"\n→ Character:  {character}")
     print(f"→ Voice:      {voice}")
+
+    if quick_select:
+        config["character"] = character
+        save_config(config)
+        print(f"→ Saved as default in {CONFIG_PATH}")
+        sys.exit(0)
     if args.style:
         print(f"→ Style:      {args.style}")
     if debug:
