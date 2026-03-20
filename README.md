@@ -9,7 +9,7 @@ python/                        Python package
   gemini_live_tools/
     gemini_live_api.py         GeminiLiveAPI, character definitions, PCM/WAV helpers
     math_eval.py               Safe AST-based math expression evaluator
-  greet_demo.py                Interactive character greeting demo (CLI)
+  gstts.py                     Gemini Streaming TTS CLI
 
 js/
   voice-character-selector.js  Drop-in voice/character picker UI widget
@@ -17,21 +17,99 @@ js/
 docs/
   streaming-tts-endpoint.md   FastAPI streaming endpoint guide with cancellation
 
-dev.sh                         Dev helper: setup, test, shell
+gstts.sh                       Gemini Streaming TTS CLI
 ```
 
-## Development
+## gstts — Gemini Streaming Text-to-Speech CLI
+
+### Quick start
 
 ```bash
-./dev.sh setup   # create .venv and install dependencies
-./dev.sh test    # run the interactive character greeting demo
-./dev.sh shell   # open a shell with the .venv activated
+# First time: set up venv and install the `gstts` command system-wide
+./gstts.sh setup
 
-# Demo options
-./dev.sh test --parallelism 4                  # parallel TTS (4 concurrent chunks)
-./dev.sh test --parallelism 4 --min-sentence-chars 60 --min-buffer-seconds 10
-./dev.sh test --live                           # use Gemini Live API (falls back to generate_content on failure)
-./dev.sh test --parallelism 4 --live           # parallel TTS with Live API (falls back to generate_content per chunk on failure)
+# After setup, use `gstts` from anywhere
+gstts "Hello world"                             # read text aloud (uses default character)
+gstts                                           # interactive: pick a character, generate & play a greeting
+```
+
+The venv is auto-created on first run if you skip setup — but `setup` also installs a
+`/usr/local/bin/gstts` symlink so you can call it from any directory.
+
+### Characters and voices
+
+```bash
+gstts -lc                                       # list available characters
+gstts -lv                                       # list available Gemini voices
+gstts "Hello" -c narrator                       # use a specific character
+gstts "Hello" -c narrator -v Charon             # character + voice override
+gstts "Hello" -s "speak slowly and dramatically"  # add a style instruction
+```
+
+In the interactive picker, **Enter** selects a character and proceeds to TTS.
+**Space** sets the character as default in `~/gstts_config.json` and exits
+(quick-select mode — no audio generated).
+
+### Piping
+
+Text can be piped from stdin — uses the default character from config:
+
+```bash
+cat README.md | gstts                           # read a file aloud
+echo "Hello world" | gstts                      # pipe text
+pbpaste | gstts                                 # read clipboard
+cat article.txt | gstts --summarize             # summarize and read
+cat notes.md | gstts -c narrator -p             # pipe with character + prepare
+```
+
+### Prepare mode
+
+By default, provided text is read as-is. Use `-p` to rewrite the text into
+speech-friendly form via Gemini before synthesis (converts markdown, LaTeX,
+abbreviations, etc. into natural speech):
+
+```bash
+gstts -p "The API returns 200 OK w/ a JSON payload incl. nested arrays"
+```
+
+### Summarize mode
+
+Use `--summarize` (or `--summary`) to condense text before reading it aloud.
+This runs a two-step pipeline: first a separate LLM call shrinks the text to
+~10% of its length, then `prepare_text` rewrites the summary for speech:
+
+```bash
+gstts --summarize "$(cat long-article.txt)"     # summarize and read
+cat research-paper.md | gstts --summarize       # pipe + summarize
+gstts --summarize -s "be funny" "long text..."  # summarize with extra style
+```
+
+### Options
+
+```bash
+gstts "text" --no-live                          # disable Live API (use generate_content)
+gstts "text" --parallelism 4                    # parallel TTS (4 concurrent chunks)
+gstts "text" --output greeting.wav              # save audio to file
+gstts "text" --debug                            # verbose output
+gstts --parallelism 4 --min-sentence-chars 60 --min-buffer-seconds 10
+```
+
+### Config
+
+Character preference is stored in `~/gstts_config.json`:
+
+```json
+{ "character": "crisp" }
+```
+
+When text is passed without `--character`, the config character is used automatically.
+After picking from the menu, you're prompted to save the selection as the new default.
+
+### Development
+
+```bash
+./gstts.sh setup                                # create .venv, install deps, symlink /usr/local/bin/gstts
+./gstts.sh shell                                # drop into a shell with the .venv activated
 ```
 
 ## Install (Python)

@@ -12,11 +12,12 @@ It is used as a dependency by other projects (e.g. algebench), pinned to a relea
 ## Running the Demo
 
 ```bash
-./dev.sh setup                                        # create .venv and install deps
-./dev.sh test                                         # run interactive greeting demo
-./dev.sh test --parallelism 4                         # parallel TTS mode
-./dev.sh test --parallelism 4 --min-sentence-chars 60 --min-buffer-seconds 10
-./dev.sh shell                                        # drop into .venv shell
+./gstts.sh setup                                      # create .venv and install deps
+./gstts.sh                                            # interactive character TTS
+./gstts.sh "Hello world"                              # read text aloud with a character voice
+./gstts.sh --parallelism 4                            # parallel TTS mode
+./gstts.sh --parallelism 4 --min-sentence-chars 60 --min-buffer-seconds 10
+./gstts.sh shell                                      # drop into .venv shell
 ```
 
 ## Project Structure
@@ -28,7 +29,7 @@ python/
     math_eval.py           Safe AST-based math evaluator
     static/
       voice-character-selector.js   Bundled JS widget (served via get_static_content())
-  greet_demo.py            Interactive CLI demo
+  gstts.py                 Gemini Streaming TTS CLI
 
 js/
   voice-character-selector.js   Source JS widget (copy kept in sync with static/)
@@ -36,7 +37,7 @@ js/
 docs/
   streaming-tts-endpoint.md    FastAPI streaming endpoint guide with cancellation
 
-dev.sh                    Dev helper: setup / test / shell
+gstts.sh                  Gemini Streaming TTS CLI: setup / shell / run
 CONTRIBUTING.md           How to add voice characters
 ```
 
@@ -52,7 +53,7 @@ CONTRIBUTING.md           How to add voice characters
 - **`prepare_text` is called by the caller**, not inside `stream_parallel_wav` / `astream_parallel_wav`. Keep it that way.
 - **Sentence boundaries**: `[long pause]` and `[medium pause]` tags split sentences in `_split_sentences`. The tag is kept at the start of the next chunk.
 - **Quota awareness**: each sentence = one Gemini API request. Avoid very small `min_sentence_chars` in production (free tier is 100 req/day).
-- **`.venv` is local** — recreate with `./dev.sh setup` if broken.
+- **`.venv` is local** — recreate with `./gstts.sh setup` if broken.
 
 ## Release Flow
 
