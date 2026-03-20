@@ -252,6 +252,13 @@ def main() -> None:
         print("Error: GEMINI_API_KEY environment variable is not set.")
         sys.exit(1)
 
+    # Read from stdin if piped and no text argument
+    if not args.text and not sys.stdin.isatty():
+        args.text = sys.stdin.read().strip()
+        if not args.text:
+            print("Error: no text received from stdin.")
+            sys.exit(1)
+
     config = load_config()
     mode = "sequential" if args.parallelism == 1 else f"parallel (x{args.parallelism})"
 
@@ -265,6 +272,9 @@ def main() -> None:
             sys.exit(1)
     elif args.text and config.get("character"):
         character = config["character"]
+    elif not sys.stdin.isatty():
+        print("Error: no default character set. Use --character or run `gstts` to pick one.")
+        sys.exit(1)
     else:
         character, quick_select = pick_character()
         picked_from_menu = True
@@ -339,14 +349,17 @@ def main() -> None:
     # reconfiguration before the first real chunk arrives.
     warmup_audio()
 
-    if debug:
-        print("  Synthesizing audio...  (press q to cancel)\n")
-    else:
-        print("  (press q to cancel)\n")
-
+    has_tty = sys.stdin.isatty()
     cancel_event = threading.Event()
-    watcher = threading.Thread(target=watch_for_cancel, args=(cancel_event,), daemon=True)
-    watcher.start()
+    watcher = None
+
+    if has_tty:
+        if debug:
+            print("  Synthesizing audio...  (press q to cancel)\n")
+        else:
+            print("  (press q to cancel)\n")
+        watcher = threading.Thread(target=watch_for_cancel, args=(cancel_event,), daemon=True)
+        watcher.start()
 
     if args.parallelism == 1:
         wav = api.synthesize_wav(prepared, character_name=character, voice_name=args.voice, style=args.style, use_live=args.live)
@@ -388,7 +401,8 @@ def main() -> None:
             print(f"\n  Saved to {args.output}")
 
     cancel_event.set()  # stop watcher if playback finished normally
-    watcher.join(timeout=1)  # wait for terminal to be restored
+    if watcher:
+        watcher.join(timeout=1)  # wait for terminal to be restored
 
     if picked_from_menu and character != config.get("character"):
         answer = input(f"\n  Save \"{character}\" as default character? [y/N] ").strip().lower()
