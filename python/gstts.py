@@ -173,14 +173,19 @@ def main() -> None:
         help="If set, merge all chunks and write the complete WAV file to this path",
     )
     parser.add_argument(
-        "--live", action="store_true", default=True,
-        help="Use Gemini Live API for synthesis (falls back to generate_content on failure, default: on)",
+        "--live", action=argparse.BooleanOptionalAction, default=True,
+        help="Use Gemini Live API for synthesis (default: on, use --no-live to disable)",
     )
     parser.add_argument(
         "--stagger-delay", type=float, default=0.5,
         help="Seconds between initial parallel API calls to avoid rate limiter bursts (default 0.5)",
     )
+    parser.add_argument(
+        "--debug", action="store_true", default=False,
+        help="Show verbose output (prepared text, mode, synthesis details)",
+    )
     args = parser.parse_args()
+    debug = args.debug
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -193,35 +198,43 @@ def main() -> None:
     picked_from_menu = False
     if args.text and config.get("character"):
         character = config["character"]
-        print(f"\n→ Config:     {CONFIG_PATH}")
-        print(f"→ Character:  {character}")
-        print(f"→ Mode:       {mode}")
+        print(f"\n→ Character:  {character}")
+        if debug:
+            print(f"→ Config:     {CONFIG_PATH}")
+            print(f"→ Mode:       {mode}")
     else:
         character = pick_character()
         picked_from_menu = True
         print(f"\n→ Character:  {character}")
-        print(f"→ Mode:       {mode}")
+        if debug:
+            print(f"→ Mode:       {mode}")
 
     client = genai.Client(api_key=api_key)
     api = GeminiLiveAPI(api_key=api_key, client=client)
 
     if args.text:
         prepared = args.text
-        print(f"\n  \"{prepared}\"\n")
+        if debug:
+            print(f"\n  \"{prepared}\"\n")
     else:
         print("\n  Generating greeting...")
         greeting = generate_greeting(client, character, length=args.length)
         print(f"\n  \"{greeting}\"\n")
 
-        print("  Preparing for TTS...")
+        if debug:
+            print("  Preparing for TTS...")
         prepared = api.prepare_text(greeting, character_name=character)
-        print(f"\n  Prepared: \"{prepared}\"\n")
+        if debug:
+            print(f"\n  Prepared: \"{prepared}\"\n")
 
     # Prime the audio device now so Core Audio finishes sample-rate
     # reconfiguration before the first real chunk arrives.
     warmup_audio()
 
-    print("  Synthesizing audio...  (press q to cancel)\n")
+    if debug:
+        print("  Synthesizing audio...  (press q to cancel)\n")
+    else:
+        print("  (press q to cancel)\n")
 
     cancel_event = threading.Event()
     watcher = threading.Thread(target=watch_for_cancel, args=(cancel_event,), daemon=True)
@@ -237,7 +250,8 @@ def main() -> None:
             pathlib.Path(args.output).write_bytes(wav)
             print(f"  Saved to {args.output}\n")
         if not cancel_event.is_set():
-            print("  Playing...\n")
+            if debug:
+                print("  Playing...\n")
             play_wav(wav, cancel_event)
     else:
         played = 0
