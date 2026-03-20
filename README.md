@@ -50,13 +50,38 @@ In the interactive picker, **Enter** selects a character and proceeds to TTS.
 **Space** sets the character as default in `~/gstts_config.json` and exits
 (quick-select mode — no audio generated).
 
+### Piping
+
+Text can be piped from stdin — uses the default character from config:
+
+```bash
+cat README.md | gstts                           # read a file aloud
+echo "Hello world" | gstts                      # pipe text
+pbpaste | gstts                                 # read clipboard
+cat article.txt | gstts --summarize             # summarize and read
+cat notes.md | gstts -c narrator -p             # pipe with character + prepare
+```
+
 ### Prepare mode
 
 By default, provided text is read as-is. Use `-p` to rewrite the text into
-speech-friendly form via Gemini before synthesis:
+speech-friendly form via Gemini before synthesis (converts markdown, LaTeX,
+abbreviations, etc. into natural speech):
 
 ```bash
 gstts -p "The API returns 200 OK w/ a JSON payload incl. nested arrays"
+```
+
+### Summarize mode
+
+Use `--summarize` (or `--summary`) to condense text before reading it aloud.
+This runs a two-step pipeline: first a separate LLM call shrinks the text to
+~10% of its length, then `prepare_text` rewrites the summary for speech:
+
+```bash
+gstts --summarize "$(cat long-article.txt)"     # summarize and read
+cat research-paper.md | gstts --summarize       # pipe + summarize
+gstts --summarize -s "be funny" "long text..."  # summarize with extra style
 ```
 
 ### Options
