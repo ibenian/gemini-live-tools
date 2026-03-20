@@ -43,24 +43,18 @@ cmd_run() {
     "$PYTHON" "$REPO_DIR/python/gstts.py" "${@}"
 }
 
-cmd_shell() {
-    ensure_venv
-    echo "Activating .venv — type 'deactivate' to exit."
-    exec "$VENV/bin/bash" --login
-}
-
 # ── dispatch ─────────────────────────────────────────────────────────────────
 
 case "${1:-}" in
     --setup|setup)   shift; cmd_setup "$@" ;;
-    --shell|shell)   shift; cmd_shell "$@" ;;
     --help|-h)
         echo "Usage: $0 [TEXT] [options]"
         echo ""
-        echo "  ./gstts.sh \"Hello world\"        Read text aloud with a character voice"
-        echo "  ./gstts.sh                       Generate a character greeting and read it"
-        echo "  ./gstts.sh setup                 Create/reinstall the .venv"
-        echo "  ./gstts.sh shell                 Open a shell with the .venv activated"
+        echo "  gstts \"Hello world\"              Read text aloud with a character voice"
+        echo "  gstts                             Interactive: pick character, generate greeting"
+        echo "  gstts -lc                         List available characters"
+        echo "  gstts -lv                         List available voices"
+        echo "  gstts setup                       Create .venv and install /usr/local/bin/gstts"
         ;;
     *)  cmd_run "$@" ;;
 esac

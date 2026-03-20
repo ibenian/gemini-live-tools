@@ -184,6 +184,10 @@ def main() -> None:
         help="Run prepare_text on input before synthesis (rewrite for speech-friendly form)",
     )
     parser.add_argument(
+        "--summarize", "--summary", action="store_true", default=False,
+        help="Summarize the text before synthesis (implies --prepare)",
+    )
+    parser.add_argument(
         "--parallelism", type=int, default=3,
         help="1 = sequential, N > 1 = parallel TTS with N threads (default 3)",
     )
@@ -225,6 +229,10 @@ def main() -> None:
     )
     args = parser.parse_args()
     debug = args.debug
+
+    # --summarize implies --prepare
+    if args.summarize:
+        args.prepare = True
 
     # List commands — no API key needed
     if args.list_characters:
@@ -280,15 +288,40 @@ def main() -> None:
     api = GeminiLiveAPI(api_key=api_key, client=client)
 
     if args.text:
+        input_text = args.text
+
+        # Step 1: Summarize (separate LLM call, no character voice)
+        if args.summarize:
+            word_count = len(input_text.split())
+            target = max(30, word_count // 10)
+            print(f"→ Summarize:  on (targeting ~{target} words)")
+            summary_prompt = (
+                f"Summarize the following text in {target} words or fewer. "
+                "Only the core message. No elaboration, no questions, no filler. "
+                "Plain text only.\n\n"
+                f"TEXT:\n{input_text}"
+            )
+            try:
+                resp = client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=[{"role": "user", "parts": [{"text": summary_prompt}]}],
+                )
+                input_text = (resp.text or "").strip() or input_text
+                if debug:
+                    print(f"\n  Summary: \"{input_text}\"\n")
+            except Exception as e:
+                print(f"  Warning: summarize failed, using original text: {e}")
+
+        # Step 2: Prepare for speech (rewrite in character voice)
         if args.prepare:
-            print("→ Prepare:    on (rewriting text for speech)")
+            print("→ Prepare:    on (rewriting for speech)")
             if debug:
                 print("\n  Preparing for TTS...")
-            prepared = api.prepare_text(args.text, character_name=character, style=args.style)
+            prepared = api.prepare_text(input_text, character_name=character, style=args.style)
             if debug:
                 print(f"\n  Prepared: \"{prepared}\"\n")
         else:
-            prepared = args.text
+            prepared = input_text
         if debug:
             print(f"\n  \"{prepared}\"\n")
     else:

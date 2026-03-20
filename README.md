@@ -20,19 +20,71 @@ docs/
 gstts.sh                       Gemini Streaming TTS CLI
 ```
 
-## Development
+## gstts — Gemini Streaming Text-to-Speech CLI
+
+### Quick start
 
 ```bash
-./gstts.sh setup                                # create .venv and install dependencies
-./gstts.sh                                      # interactive character TTS
-./gstts.sh "Hello world"                        # read text aloud with a character voice
-./gstts.sh shell                                # open a shell with the .venv activated
+# First time: set up venv and install the `gstts` command system-wide
+./gstts.sh setup
 
-# Options
-./gstts.sh --parallelism 4                      # parallel TTS (4 concurrent chunks)
-./gstts.sh --parallelism 4 --min-sentence-chars 60 --min-buffer-seconds 10
-./gstts.sh --live                               # use Gemini Live API
-./gstts.sh "Hello world" --parallelism 4 --live # read custom text with parallel Live API
+# After setup, use `gstts` from anywhere
+gstts "Hello world"                             # read text aloud (uses default character)
+gstts                                           # interactive: pick a character, generate & play a greeting
+```
+
+The venv is auto-created on first run if you skip setup — but `setup` also installs a
+`/usr/local/bin/gstts` symlink so you can call it from any directory.
+
+### Characters and voices
+
+```bash
+gstts -lc                                       # list available characters
+gstts -lv                                       # list available Gemini voices
+gstts "Hello" -c narrator                       # use a specific character
+gstts "Hello" -c narrator -v Charon             # character + voice override
+gstts "Hello" -s "speak slowly and dramatically"  # add a style instruction
+```
+
+In the interactive picker, **Enter** selects a character and proceeds to TTS.
+**Space** sets the character as default in `~/gstts_config.json` and exits
+(quick-select mode — no audio generated).
+
+### Prepare mode
+
+By default, provided text is read as-is. Use `-p` to rewrite the text into
+speech-friendly form via Gemini before synthesis:
+
+```bash
+gstts -p "The API returns 200 OK w/ a JSON payload incl. nested arrays"
+```
+
+### Options
+
+```bash
+gstts "text" --no-live                          # disable Live API (use generate_content)
+gstts "text" --parallelism 4                    # parallel TTS (4 concurrent chunks)
+gstts "text" --output greeting.wav              # save audio to file
+gstts "text" --debug                            # verbose output
+gstts --parallelism 4 --min-sentence-chars 60 --min-buffer-seconds 10
+```
+
+### Config
+
+Character preference is stored in `~/gstts_config.json`:
+
+```json
+{ "character": "crisp" }
+```
+
+When text is passed without `--character`, the config character is used automatically.
+After picking from the menu, you're prompted to save the selection as the new default.
+
+### Development
+
+```bash
+./gstts.sh setup                                # create .venv, install deps, symlink /usr/local/bin/gstts
+./gstts.sh shell                                # drop into a shell with the .venv activated
 ```
 
 ## Install (Python)
