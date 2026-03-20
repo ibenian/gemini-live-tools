@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Interactive character greeting demo.
+"""Gemini Streaming Text-to-Speech (gstts).
 
 Usage:
-    python greet_demo.py [--parallelism N]
+    python gstts.py ["text to read"] [--parallelism N]
 
-Picks a character, generates a creative in-character greeting via Gemini,
-prepares it for TTS, and plays it aloud.
+If text is provided, picks a character voice and reads it aloud directly.
+Otherwise, picks a character and generates a creative greeting via Gemini.
 
   --parallelism 1   Sequential mode: single TTS call (default)
   --parallelism N   Parallel mode: split into sentences, synthesize N at a time,
@@ -15,6 +15,7 @@ Requires: GEMINI_API_KEY env var
 """
 
 import io
+import json
 import os
 import sys
 import argparse
@@ -28,6 +29,15 @@ from simple_term_menu import TerminalMenu
 from google import genai
 
 from gemini_live_tools import GeminiLiveAPI, CHARACTERS
+
+CONFIG_PATH = os.path.expanduser("~/gstts_config.json")
+
+
+def load_config() -> dict:
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH) as f:
+            return json.load(f)
+    return {}
 
 
 def pick_character() -> str:
@@ -119,7 +129,11 @@ def play_wav(wav_bytes: bytes, cancel_event: threading.Event = None) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Gemini character greeting demo")
+    parser = argparse.ArgumentParser(description="Gemini Streaming Text-to-Speech (gstts)")
+    parser.add_argument(
+        "text", nargs="?", default=None,
+        help="Text to read aloud (skip greeting generation)",
+    )
     parser.add_argument(
         "--parallelism", type=int, default=3,
         help="1 = sequential, N > 1 = parallel TTS with N threads (default 3)",
@@ -163,22 +177,33 @@ def main() -> None:
         print("Error: GEMINI_API_KEY environment variable is not set.")
         sys.exit(1)
 
+    config = load_config()
     mode = "sequential" if args.parallelism == 1 else f"parallel (x{args.parallelism})"
 
-    character = pick_character()
-    print(f"\n→ Character:  {character}")
-    print(f"→ Mode:       {mode}")
+    if args.text and config.get("character"):
+        character = config["character"]
+        print(f"\n→ Config:     {CONFIG_PATH}")
+        print(f"→ Character:  {character}")
+        print(f"→ Mode:       {mode}")
+    else:
+        character = pick_character()
+        print(f"\n→ Character:  {character}")
+        print(f"→ Mode:       {mode}")
 
     client = genai.Client(api_key=api_key)
     api = GeminiLiveAPI(api_key=api_key, client=client)
 
-    print("\n  Generating greeting...")
-    greeting = generate_greeting(client, character, length=args.length)
-    print(f"\n  \"{greeting}\"\n")
+    if args.text:
+        prepared = args.text
+        print(f"\n  \"{prepared}\"\n")
+    else:
+        print("\n  Generating greeting...")
+        greeting = generate_greeting(client, character, length=args.length)
+        print(f"\n  \"{greeting}\"\n")
 
-    print("  Preparing for TTS...")
-    prepared = api.prepare_text(greeting, character_name=character)
-    print(f"\n  Prepared: \"{prepared}\"\n")
+        print("  Preparing for TTS...")
+        prepared = api.prepare_text(greeting, character_name=character)
+        print(f"\n  Prepared: \"{prepared}\"\n")
 
     # Prime the audio device now so Core Audio finishes sample-rate
     # reconfiguration before the first real chunk arrives.

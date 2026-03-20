@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# dev.sh — development helper for gemini-live-tools
+# gstts.sh — Gemini Streaming Text-to-Speech
 set -e
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT="$0"
+[ -L "$SCRIPT" ] && SCRIPT="$(readlink "$SCRIPT")"
+REPO_DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
 VENV="$REPO_DIR/.venv"
 PYTHON="$VENV/bin/python"
 
@@ -22,13 +24,23 @@ cmd_setup() {
     python3.10 -m venv "$VENV"
     "$VENV/bin/pip" install --upgrade pip
     "$VENV/bin/pip" install -e "$REPO_DIR/python"
+
+    # Install system-wide symlink
+    local link="/usr/local/bin/gstts"
+    local target="$REPO_DIR/gstts.sh"
+    if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
+        echo "Symlink $link already points to $target"
+    else
+        echo "Installing symlink: $link → $target"
+        ln -sf "$target" "$link"
+    fi
+
     echo "Done."
 }
 
-cmd_test() {
+cmd_run() {
     ensure_venv
-    echo "Running greet_demo..."
-    "$PYTHON" "$REPO_DIR/python/greet_demo.py" "${@}"
+    "$PYTHON" "$REPO_DIR/python/gstts.py" "${@}"
 }
 
 cmd_shell() {
@@ -41,13 +53,14 @@ cmd_shell() {
 
 case "${1:-}" in
     --setup|setup)   shift; cmd_setup "$@" ;;
-    --test|test)     shift; cmd_test "$@" ;;
     --shell|shell)   shift; cmd_shell "$@" ;;
-    *)
-        echo "Usage: $0 <command>"
+    --help|-h)
+        echo "Usage: $0 [TEXT] [options]"
         echo ""
-        echo "  setup   Create/reinstall the .venv"
-        echo "  test    Run the interactive character greeting demo"
-        echo "  shell   Drop into a shell with the .venv activated"
+        echo "  ./gstts.sh \"Hello world\"        Read text aloud with a character voice"
+        echo "  ./gstts.sh                       Generate a character greeting and read it"
+        echo "  ./gstts.sh setup                 Create/reinstall the .venv"
+        echo "  ./gstts.sh shell                 Open a shell with the .venv activated"
         ;;
+    *)  cmd_run "$@" ;;
 esac

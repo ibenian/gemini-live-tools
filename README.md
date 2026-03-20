@@ -9,7 +9,7 @@ python/                        Python package
   gemini_live_tools/
     gemini_live_api.py         GeminiLiveAPI, character definitions, PCM/WAV helpers
     math_eval.py               Safe AST-based math expression evaluator
-  greet_demo.py                Interactive character greeting demo (CLI)
+  gstts.py                     Gemini Streaming TTS CLI
 
 js/
   voice-character-selector.js  Drop-in voice/character picker UI widget
@@ -17,21 +17,22 @@ js/
 docs/
   streaming-tts-endpoint.md   FastAPI streaming endpoint guide with cancellation
 
-dev.sh                         Dev helper: setup, test, shell
+gstts.sh                       Gemini Streaming TTS CLI
 ```
 
 ## Development
 
 ```bash
-./dev.sh setup   # create .venv and install dependencies
-./dev.sh test    # run the interactive character greeting demo
-./dev.sh shell   # open a shell with the .venv activated
+./gstts.sh setup                                # create .venv and install dependencies
+./gstts.sh                                      # interactive character TTS
+./gstts.sh "Hello world"                        # read text aloud with a character voice
+./gstts.sh shell                                # open a shell with the .venv activated
 
-# Demo options
-./dev.sh test --parallelism 4                  # parallel TTS (4 concurrent chunks)
-./dev.sh test --parallelism 4 --min-sentence-chars 60 --min-buffer-seconds 10
-./dev.sh test --live                           # use Gemini Live API (falls back to generate_content on failure)
-./dev.sh test --parallelism 4 --live           # parallel TTS with Live API (falls back to generate_content per chunk on failure)
+# Options
+./gstts.sh --parallelism 4                      # parallel TTS (4 concurrent chunks)
+./gstts.sh --parallelism 4 --min-sentence-chars 60 --min-buffer-seconds 10
+./gstts.sh --live                               # use Gemini Live API
+./gstts.sh "Hello world" --parallelism 4 --live # read custom text with parallel Live API
 ```
 
 ## Install (Python)
