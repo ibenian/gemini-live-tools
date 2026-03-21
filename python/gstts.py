@@ -376,7 +376,7 @@ def main() -> None:
         import sounddevice as sd
         def _rt_log(msg):
             if debug or "retrying" in msg.lower():
-                print(msg)
+                print(f"\r  {msg}                    ")
         stream = sd.OutputStream(samplerate=24000, channels=1, dtype='int16')
         stream.start()
         chunk_count = 0
