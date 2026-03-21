@@ -294,6 +294,12 @@ def main() -> None:
         sys.exit(0)
     if args.realtime:
         print(f"→ Mode:       realtime (low-latency streaming)")
+    if args.prepare or not args.text:
+        print(f"→ Prepare:    on (rewriting for speech)")
+    if args.summarize:
+        word_count = len(args.text.split()) if args.text else 0
+        target = max(30, word_count // 10) if word_count else "auto"
+        print(f"→ Summarize:  on (targeting ~{target} words)")
     if args.style:
         print(f"→ Style:      {args.style}")
     if debug:
@@ -311,7 +317,6 @@ def main() -> None:
         if args.summarize:
             word_count = len(input_text.split())
             target = max(30, word_count // 10)
-            print(f"→ Summarize:  on (targeting ~{target} words)")
             summary_prompt = (
                 f"Summarize the following text in {target} words or fewer. "
                 "Only the core message. No elaboration, no questions, no filler. "
@@ -331,7 +336,6 @@ def main() -> None:
 
         # Step 2: Prepare for speech (rewrite in character voice)
         if args.prepare:
-            print("→ Prepare:    on (rewriting for speech)")
             if debug:
                 print("\n  Preparing for TTS...")
             prepared = api.prepare_text(input_text, character_name=character, style=args.style)
@@ -346,8 +350,6 @@ def main() -> None:
         greeting = generate_greeting(client, character, length=args.length)
         print(f"\n  \"{greeting}\"\n")
 
-        if debug:
-            print("  Preparing for TTS...")
         prepared = api.prepare_text(greeting, character_name=character, style=args.style)
         if debug:
             print(f"\n  Prepared: \"{prepared}\"\n")
