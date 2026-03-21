@@ -536,7 +536,6 @@ class GeminiLiveAPI:
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             system_instruction=self._tts_system_instruction(character_name, style),
-            temperature=0.0,
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=resolved_voice)
@@ -603,11 +602,12 @@ class GeminiLiveAPI:
         return asyncio.run(self._synthesize_pcm_via_live(text, voice_name, character_name, style, log))
 
     @staticmethod
-    def estimate_audio_duration(text: str, words_per_minute: float = 150.0) -> float:
+    def estimate_audio_duration(text: str, words_per_minute: float = 100.0) -> float:
         """Estimate audio duration in seconds from text word count.
 
-        Uses ~150 WPM as typical speech rate. Useful for progress indicators
-        when streaming realtime PCM.
+        Uses ~100 WPM as default — conservative to account for expressive
+        character voices, pauses, and emphasis that slow delivery below
+        typical ~150 WPM conversational speech.
 
         Returns:
             Estimated duration in seconds.
@@ -672,7 +672,7 @@ class GeminiLiveAPI:
                     for part in (getattr(model_turn, "parts", None) or []):
                         inline = getattr(part, "inline_data", None)
                         if inline and getattr(inline, "data", None):
-                            pcm = self._audio_bytes_to_pcm(inline.data, "audio/pcm")
+                            pcm = self._audio_bytes_to_pcm(inline.data, getattr(inline, "mime_type", "audio/pcm"))
                             if pcm:
                                 chunk_count += 1
                                 total_bytes += len(pcm)
