@@ -487,7 +487,11 @@ class GeminiLiveAPI:
 
         character_desc = self._resolve_character(character_name)
         style_clause = f" Additional style guidance: {style}" if style else ""
-        tag_clause = "Do not include any bracket markup tags or parenthetical emotion cues. "
+        tag_clause = (
+            "Use Gemini TTS markup tags in [square brackets] for non-speech sounds and style cues: "
+            "[laughing], [sigh], [uhm], [whispering], [shouting], [sarcasm], [short pause], "
+            "[medium pause], [long pause]. Do NOT use *asterisk* or (parenthetical) action tags. "
+        )
 
         prompt = (
             f"You are: {character_desc} Speak entirely in this character's voice and style.\n"
@@ -813,46 +817,8 @@ class GeminiLiveAPI:
             return False
 
     def _clean_for_tts(self, text: str) -> str:
-        """Fast regex-based cleanup: LaTeX → spoken words, markdown stripped."""
-        # Display math blocks — remove entirely (too complex to speak inline)
-        text = re.sub(r'\$\$[\s\S]*?\$\$', '', text)
-        # Common LaTeX Greek letters and symbols
-        latex_map = [
-            (r'\\theta', 'theta'), (r'\\phi', 'phi'), (r'\\psi', 'psi'),
-            (r'\\alpha', 'alpha'), (r'\\beta', 'beta'), (r'\\gamma', 'gamma'),
-            (r'\\delta', 'delta'), (r'\\epsilon', 'epsilon'), (r'\\lambda', 'lambda'),
-            (r'\\mu', 'mu'), (r'\\sigma', 'sigma'), (r'\\omega', 'omega'),
-            (r'\\pi', 'pi'), (r'\\tau', 'tau'), (r'\\rho', 'rho'),
-            (r'\\nabla', 'nabla'), (r'\\infty', 'infinity'), (r'\\cdot', 'dot'),
-            (r'\\times', 'times'), (r'\\pm', 'plus or minus'),
-        ]
-        for pattern, replacement in latex_map:
-            text = re.sub(pattern, replacement, text)
-        # Fractions: \frac{a}{b} → a over b
-        text = re.sub(r'\\frac\{([^}]+)\}\{([^}]+)\}', r'\1 over \2', text)
-        # Superscripts: x^{2} or x^2 → x squared / x to the n
-        text = re.sub(r'\^2\b|\^\{2\}', ' squared', text)
-        text = re.sub(r'\^\{([^}]+)\}', r' to the \1', text)
-        text = re.sub(r'\^(\w)', r' to the \1', text)
-        # Vectors/bold: \vec{v}, \mathbf{v} → just v
-        text = re.sub(r'\\(?:vec|mathbf|hat|bar)\{([^}]+)\}', r'\1', text)
-        # Strip remaining LaTeX commands and dollar signs
-        text = re.sub(r'\\[a-zA-Z]+\{([^}]*)\}', r'\1', text)
-        text = re.sub(r'\\[a-zA-Z]+', '', text)
-        text = re.sub(r'\$', '', text)
-        text = re.sub(r'[{}]', '', text)
-        # Markdown: code blocks, bold, italic, headers, links
-        text = re.sub(r'```[\s\S]*?```', '', text)
-        text = re.sub(r'`[^`]+`', '', text)
-        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
-        text = re.sub(r'\*(.+?)\*', r'\1', text)
-        text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
-        text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
-        # Strip all bracket TTS tags — they cause garbled/elongated output at tag
-        # boundaries; character style description handles pacing/delivery instead.
-        text = re.sub(r'\[[^\]]+\]', '', text)
-        # Collapse whitespace
-        text = re.sub(r'\s{2,}', ' ', text).strip()
+        """Cleanup disabled — Gemini native audio handles raw text well,
+        and prepare_text already converts LaTeX/markdown when used."""
         return text
 
     def _fallback_tts_pcm(
