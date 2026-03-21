@@ -446,9 +446,15 @@ class GeminiLiveAPI:
         stop point.  Framing the input as a multi-sentence passage to be read
         straight through — with an explicit sentence count and a continuation
         instruction — significantly reduces early truncation.
+
+        For short texts (≤ 2 sentences), the plain text is returned as-is
+        because the verbose wrapper can cause the native audio model to
+        produce zero audio output.
         """
         sentences = [s for s in re.split(r'(?<=[.!?])\s+', clean_text.strip()) if s.strip()]
-        n = len(sentences)
+        n = max(len(sentences), 1)  # at least 1 even without punctuation
+        if n <= 2:
+            return clean_text
         return (
             f"Read the following passage aloud, word for word, from the first word "
             f"to the last. It contains {n} sentence(s). After each sentence, "
@@ -653,34 +659,44 @@ class GeminiLiveAPI:
         user_text = self._build_reading_prompt(clean_text)
         chunk_count = 0
         total_bytes = 0
+        max_retries = 3
 
-        deadline = time.monotonic() + timeout
-        try:
-            async with client.aio.live.connect(model=self.live_model, config=config) as session:
-                await session.send_client_content(
-                    turns={"role": "user", "parts": [{"text": user_text}]},
-                    turn_complete=True,
-                )
-                async for response in session.receive():
-                    if time.monotonic() > deadline:
-                        _log(f"[TTS-Realtime] timed out after {timeout:.0f}s")
-                        break
-                    server_content = getattr(response, "server_content", None)
-                    if not server_content:
-                        continue
-                    model_turn = getattr(server_content, "model_turn", None)
-                    for part in (getattr(model_turn, "parts", None) or []):
-                        inline = getattr(part, "inline_data", None)
-                        if inline and getattr(inline, "data", None):
-                            pcm = self._audio_bytes_to_pcm(inline.data, getattr(inline, "mime_type", "audio/pcm"))
-                            if pcm:
-                                chunk_count += 1
-                                total_bytes += len(pcm)
-                                yield pcm
-                    if getattr(server_content, "turn_complete", False):
-                        break
-        except Exception as exc:
-            _log(f"[TTS-Realtime] error: {_friendly_error(exc)}")
+        for attempt in range(1, max_retries + 1):
+            chunk_count = 0
+            total_bytes = 0
+            deadline = time.monotonic() + timeout
+            try:
+                async with client.aio.live.connect(model=self.live_model, config=config) as session:
+                    await session.send_client_content(
+                        turns={"role": "user", "parts": [{"text": user_text}]},
+                        turn_complete=True,
+                    )
+                    async for response in session.receive():
+                        if time.monotonic() > deadline:
+                            _log(f"[TTS-Realtime] timed out after {timeout:.0f}s")
+                            break
+                        server_content = getattr(response, "server_content", None)
+                        if not server_content:
+                            continue
+                        model_turn = getattr(server_content, "model_turn", None)
+                        for part in (getattr(model_turn, "parts", None) or []):
+                            inline = getattr(part, "inline_data", None)
+                            if inline and getattr(inline, "data", None):
+                                pcm = self._audio_bytes_to_pcm(inline.data, getattr(inline, "mime_type", "audio/pcm"))
+                                if pcm:
+                                    chunk_count += 1
+                                    total_bytes += len(pcm)
+                                    yield pcm
+                        if getattr(server_content, "turn_complete", False):
+                            break
+            except Exception as exc:
+                _log(f"[TTS-Realtime] error on attempt {attempt}: {_friendly_error(exc)}")
+
+            if chunk_count > 0:
+                break
+            if attempt < max_retries:
+                _log(f"[TTS-Realtime] no audio received, retrying ({attempt}/{max_retries})...")
+                await asyncio.sleep(0.5)
 
         _log(f"[TTS-Realtime] done: {chunk_count} chunks, {total_bytes} bytes")
 

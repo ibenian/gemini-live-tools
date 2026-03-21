@@ -374,7 +374,9 @@ def main() -> None:
     if args.realtime:
         import numpy as np
         import sounddevice as sd
-        log_fn = print if debug else (lambda msg: None)
+        def _rt_log(msg):
+            if debug or "retrying" in msg.lower():
+                print(msg)
         stream = sd.OutputStream(samplerate=24000, channels=1, dtype='int16')
         stream.start()
         chunk_count = 0
@@ -389,7 +391,7 @@ def main() -> None:
             voice_name=args.voice,
             character_name=character,
             style=args.style,
-            log=log_fn,
+            log=_rt_log,
         ):
             if cancel_event.is_set():
                 break
