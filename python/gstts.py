@@ -20,6 +20,7 @@ import os
 import sys
 import argparse
 import threading
+import time
 import tty
 import termios
 import wave
@@ -377,7 +378,12 @@ def main() -> None:
         stream = sd.OutputStream(samplerate=24000, channels=1, dtype='int16')
         stream.start()
         chunk_count = 0
+        total_samples = 0
         all_pcm = [] if args.output else None
+        t0 = time.monotonic()
+        first_chunk_time = None
+        est_duration = api.estimate_audio_duration(prepared)
+        print("  Streaming...", end="", flush=True)
         for pcm_chunk in api.stream_realtime_pcm(
             prepared,
             voice_name=args.voice,
@@ -390,13 +396,27 @@ def main() -> None:
             pcm_array = np.frombuffer(pcm_chunk, dtype=np.int16)
             stream.write(pcm_array)
             chunk_count += 1
+            total_samples += len(pcm_array)
+            if first_chunk_time is None:
+                first_chunk_time = time.monotonic() - t0
+            audio_sec = total_samples / 24000
+            pct = min(99, int(audio_sec / est_duration * 100)) if est_duration > 0 else 0
+            print(f"\r  ▶ Playing {audio_sec:.1f}s ({pct}%) received ({chunk_count} chunks)", end="", flush=True)
             if all_pcm is not None:
                 all_pcm.append(pcm_chunk)
+        # Wait for remaining audio to finish playing
+        remaining_sec = max(0, (total_samples / 24000) - (time.monotonic() - t0 - (first_chunk_time or 0)))
+        if remaining_sec > 0 and not cancel_event.is_set():
+            print(f"\r  ▶ Playing {audio_sec:.1f}s (finishing...)        ", end="", flush=True)
+            time.sleep(remaining_sec)
         stream.stop()
         stream.close()
+        elapsed = time.monotonic() - t0
         if not chunk_count:
-            print("Error: no audio received from Live API.")
+            print("\rError: no audio received from Live API.          ")
             sys.exit(1)
+        latency_str = f", latency {first_chunk_time*1000:.0f}ms" if first_chunk_time else ""
+        print(f"\r  Played {audio_sec:.1f}s in {elapsed:.1f}s ({chunk_count} chunks{latency_str})          ")
         if args.output and all_pcm:
             import pathlib
             from gemini_live_tools import pcm_to_wav_bytes

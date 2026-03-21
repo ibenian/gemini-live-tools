@@ -602,6 +602,19 @@ class GeminiLiveAPI:
     ) -> Optional[bytes]:
         return asyncio.run(self._synthesize_pcm_via_live(text, voice_name, character_name, style, log))
 
+    @staticmethod
+    def estimate_audio_duration(text: str, words_per_minute: float = 150.0) -> float:
+        """Estimate audio duration in seconds from text word count.
+
+        Uses ~150 WPM as typical speech rate. Useful for progress indicators
+        when streaming realtime PCM.
+
+        Returns:
+            Estimated duration in seconds.
+        """
+        word_count = len(text.split())
+        return word_count / (words_per_minute / 60.0)
+
     # ── Realtime streaming ────────────────────────────────────────────────────
 
     async def astream_realtime_pcm(

@@ -276,7 +276,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from gemini_live_tools import GeminiLiveAPI, pcm_to_wav_bytes
+from gemini_live_tools import GeminiLiveAPI
 
 app = FastAPI()
 api = GeminiLiveAPI(api_key="...")
@@ -295,7 +295,13 @@ async def tts_realtime(req: RealtimeTTSRequest, request: Request):
 
     Response is a stream of raw PCM s16le mono 24kHz bytes.
     Client should feed directly to an AudioWorklet or ScriptProcessorNode.
+
+    The X-Audio-Est-Duration header provides an estimated total duration
+    in seconds (based on ~150 WPM). Clients can use this to compute
+    progress: bytesReceived / (2 * sampleRate) / estDuration * 100.
     """
+    est_duration = api.estimate_audio_duration(req.text)
+
     async def generate():
         async for pcm_chunk in api.astream_realtime_pcm(
             req.text,
@@ -314,6 +320,7 @@ async def tts_realtime(req: RealtimeTTSRequest, request: Request):
             "X-Audio-Sample-Rate": "24000",
             "X-Audio-Channels": "1",
             "X-Audio-Format": "s16le",
+            "X-Audio-Est-Duration": f"{est_duration:.1f}",
         },
     )
 ```
@@ -326,7 +333,7 @@ chunks as they arrive:
 ```js
 let controller = new AbortController();
 
-async function streamRealtimeTTS(text, characterName) {
+async function streamRealtimeTTS(text, characterName, onProgress) {
     const audioCtx = new AudioContext({ sampleRate: 24000 });
 
     // Create a ScriptProcessorNode for buffered playback
@@ -360,14 +367,28 @@ async function streamRealtimeTTS(text, characterName) {
         signal: controller.signal,
     });
 
+    // Read estimated duration for progress tracking
+    const sampleRate = parseInt(resp.headers.get("X-Audio-Sample-Rate") || "24000");
+    const estDuration = parseFloat(resp.headers.get("X-Audio-Est-Duration") || "0");
+
     const reader = resp.body.getReader();
+    let totalBytes = 0;
     while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        totalBytes += value.byteLength;
         // Convert Uint8Array (s16le bytes) to Int16Array
         const int16 = new Int16Array(value.buffer, value.byteOffset, value.byteLength / 2);
         pcmQueue.push(int16);
+
+        // Report progress: audio seconds received vs estimated total
+        if (onProgress && estDuration > 0) {
+            const audioSec = totalBytes / (2 * sampleRate);
+            const pct = Math.min(99, Math.round(audioSec / estDuration * 100));
+            onProgress({ audioSec, estDuration, pct, totalBytes });
+        }
     }
+    if (onProgress) onProgress({ audioSec: estDuration, estDuration, pct: 100, totalBytes });
 
     // Wait for queue to drain, then clean up
     await new Promise(resolve => {
