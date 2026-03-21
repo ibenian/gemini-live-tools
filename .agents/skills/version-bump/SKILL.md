@@ -48,25 +48,47 @@ The version in `pyproject.toml` is already the version being developed. No chang
 
 The version in `pyproject.toml` is the version to release. The release flow is:
 
-1. **Tag** the current commit and create a GitHub release:
+1. **Ensure on main** and up to date:
    ```bash
-   git tag v0.1.2
-   git push origin v0.1.2
-   gh release create v0.1.2 --title "v0.1.2" --notes "..."
+   git checkout main && git pull
    ```
 
-2. **Immediately bump** `pyproject.toml` to the next patch version and commit:
+2. **Tag** the current commit and create a GitHub release:
    ```bash
-   # Edit python/pyproject.toml: 0.1.2 → 0.1.3
+   git tag v0.1.X
+   git push origin v0.1.X
+   gh release create v0.1.X --title "v0.1.X" --notes "..."
+   ```
+   Include release notes summarizing PRs merged since the last tag:
+   ```bash
+   git log v0.1.(X-1)..HEAD --oneline
+   ```
+
+3. **Immediately bump** `pyproject.toml` to the next patch version via a PR:
+   ```bash
+   git checkout -b chore/bump-version-0.1.(X+1)
+   # Edit python/pyproject.toml: 0.1.X → 0.1.(X+1)
    git add python/pyproject.toml
-   git commit -m "chore: bump version to 0.1.3"
-   git push origin main
+   git commit -m "chore: bump version to 0.1.(X+1)"
+   git push -u origin chore/bump-version-0.1.(X+1)
+   gh pr create --title "chore: bump version to 0.1.(X+1)" --body "..." --label chore
+   ```
+
+4. **Merge the bump PR** (with `--admin` per project rules):
+   ```bash
+   gh pr merge --squash --admin
+   ```
+
+5. **Return to main**:
+   ```bash
+   git checkout main && git pull
    ```
 
 This ensures:
-- The tag `v0.1.2` points to a commit where `pyproject.toml` says `0.1.2` ✓
-- The tip of `main` immediately moves to `0.1.3`, representing the next dev cycle
-- Consumers pinning to `v0.1.2` in `requirements.txt` get the correct version
+- The tag `v0.1.X` points to a commit where `pyproject.toml` says `0.1.X`
+- The tip of `main` immediately moves to `0.1.(X+1)`, representing the next dev cycle
+- Consumers pinning to `v0.1.X` in `requirements.txt` get the correct version
+- The bump goes through a PR for clean git history
 
 ## Versioning Rules
 
@@ -75,3 +97,4 @@ This ensures:
 - The version in `pyproject.toml` on `main` is always the **next unreleased version**
 - Consumers (e.g., algebench) pin to a tag in `requirements.txt`
 - Commit message: **`chore: bump version to X.Y.Z`**
+- PRs are labeled `chore` and merged with `--admin`
