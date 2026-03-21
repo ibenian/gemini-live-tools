@@ -84,6 +84,18 @@ cat research-paper.md | gstts --summarize       # pipe + summarize
 gstts --summarize -s "be funny" "long text..."  # summarize with extra style
 ```
 
+### Realtime mode
+
+Low-latency streaming — audio starts playing in ~200-500ms. Bypasses sentence
+splitting and buffering; streams PCM directly from a single Live API session:
+
+```bash
+gstts -rt "Hello world"                         # realtime with default character
+gstts -rt -c narrator "Hello world"             # realtime with specific character
+gstts -rt -p "text with markdown"               # prepare first, then realtime
+cat article.txt | gstts -rt                     # pipe with realtime playback
+```
+
 ### Options
 
 ```bash
@@ -155,6 +167,15 @@ for chunk in api.stream_parallel_wav(prepared, parallelism=4, character_name="cr
 # Parallel streaming TTS (async — for FastAPI / aiohttp)
 async for chunk in api.astream_parallel_wav(prepared, parallelism=4, character_name="crisp"):
     yield chunk
+
+# Realtime streaming TTS — lowest latency (~200-500ms to first audio)
+# Single Live API session, yields raw PCM s16le 24kHz as it arrives
+for pcm_chunk in api.stream_realtime_pcm("Hello world", character_name="crisp"):
+    stream.write(np.frombuffer(pcm_chunk, dtype=np.int16))
+
+# Realtime streaming TTS (async — for FastAPI)
+async for pcm_chunk in api.astream_realtime_pcm("Hello world", character_name="crisp"):
+    yield pcm_chunk
 
 # Use ParallelTTSStatus standalone for your own streaming loops
 status = ParallelTTSStatus(n=total_chunks)
