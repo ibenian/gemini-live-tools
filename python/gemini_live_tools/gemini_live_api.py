@@ -602,6 +602,120 @@ class GeminiLiveAPI:
     ) -> Optional[bytes]:
         return asyncio.run(self._synthesize_pcm_via_live(text, voice_name, character_name, style, log))
 
+    # ── Realtime streaming ────────────────────────────────────────────────────
+
+    async def astream_realtime_pcm(
+        self,
+        text: str,
+        *,
+        voice_name: Optional[str] = None,
+        character_name: Optional[str] = None,
+        style: Optional[str] = None,
+        timeout: float = 60.0,
+        log: Optional[Callable[[str], None]] = None,
+    ) -> AsyncIterator[bytes]:
+        """Stream raw PCM s16le 24kHz chunks as they arrive from the Live API.
+
+        Unlike stream_parallel_wav which splits text into sentences and makes
+        multiple API calls, this sends the entire text in a single Live API
+        session and yields each PCM chunk as it arrives from the websocket.
+        This gives the lowest possible time-to-first-audio (~200-500ms).
+
+        Args:
+            text:           Text to synthesize (should already be prepared if desired).
+            voice_name:     Gemini voice override.
+            character_name: Character name for voice + style.
+            style:          Additional style guidance.
+            timeout:        Total session timeout in seconds.
+            log:            Optional logging callback.
+
+        Yields:
+            Raw PCM bytes (s16le mono 24kHz) — each chunk is typically 1-4KB.
+        """
+        _log = log or (lambda msg: None)
+        from google import genai
+        client = genai.Client(api_key=self.api_key)
+        config = self._build_live_config(voice_name, character_name, style)
+        clean_text = self._clean_for_tts(text)
+        user_text = self._build_reading_prompt(clean_text)
+        chunk_count = 0
+        total_bytes = 0
+
+        deadline = time.monotonic() + timeout
+        try:
+            async with client.aio.live.connect(model=self.live_model, config=config) as session:
+                await session.send_client_content(
+                    turns={"role": "user", "parts": [{"text": user_text}]},
+                    turn_complete=True,
+                )
+                async for response in session.receive():
+                    if time.monotonic() > deadline:
+                        _log(f"[TTS-Realtime] timed out after {timeout:.0f}s")
+                        break
+                    server_content = getattr(response, "server_content", None)
+                    if not server_content:
+                        continue
+                    model_turn = getattr(server_content, "model_turn", None)
+                    for part in (getattr(model_turn, "parts", None) or []):
+                        inline = getattr(part, "inline_data", None)
+                        if inline and getattr(inline, "data", None):
+                            pcm = self._audio_bytes_to_pcm(inline.data, "audio/pcm")
+                            if pcm:
+                                chunk_count += 1
+                                total_bytes += len(pcm)
+                                yield pcm
+                    if getattr(server_content, "turn_complete", False):
+                        break
+        except Exception as exc:
+            _log(f"[TTS-Realtime] error: {_friendly_error(exc)}")
+
+        _log(f"[TTS-Realtime] done: {chunk_count} chunks, {total_bytes} bytes")
+
+    def stream_realtime_pcm(
+        self,
+        text: str,
+        *,
+        voice_name: Optional[str] = None,
+        character_name: Optional[str] = None,
+        style: Optional[str] = None,
+        timeout: float = 60.0,
+        log: Optional[Callable[[str], None]] = None,
+    ) -> Iterator[bytes]:
+        """Sync wrapper for astream_realtime_pcm.
+
+        Yields raw PCM s16le 24kHz chunks with minimal latency.
+        Suitable for feeding directly to sounddevice.OutputStream.
+        """
+        q: queue.Queue[Optional[bytes]] = queue.Queue()
+
+        async def _producer():
+            try:
+                async for chunk in self.astream_realtime_pcm(
+                    text,
+                    voice_name=voice_name,
+                    character_name=character_name,
+                    style=style,
+                    timeout=timeout,
+                    log=log,
+                ):
+                    q.put(chunk)
+            finally:
+                q.put(None)  # sentinel
+
+        def _run():
+            asyncio.run(_producer())
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+
+        while True:
+            chunk = q.get()
+            if chunk is None:
+                break
+            yield chunk
+
+        thread.join(timeout=2)
+
     def stream_tts(
         self,
         text: str,

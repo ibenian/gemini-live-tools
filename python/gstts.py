@@ -216,6 +216,10 @@ def main() -> None:
         help="If set, merge all chunks and write the complete WAV file to this path",
     )
     parser.add_argument(
+        "--realtime", "-rt", action="store_true", default=False,
+        help="Low-latency mode: stream PCM directly from Live API to speaker (~200ms to first audio)",
+    )
+    parser.add_argument(
         "--live", action=argparse.BooleanOptionalAction, default=True,
         help="Use Gemini Live API for synthesis (default: on, use --no-live to disable)",
     )
@@ -288,11 +292,14 @@ def main() -> None:
         save_config(config)
         print(f"→ Saved as default in {CONFIG_PATH}")
         sys.exit(0)
+    if args.realtime:
+        print(f"→ Mode:       realtime (low-latency streaming)")
     if args.style:
         print(f"→ Style:      {args.style}")
     if debug:
         print(f"→ Config:     {CONFIG_PATH}")
-        print(f"→ Mode:       {mode}")
+        if not args.realtime:
+            print(f"→ Mode:       {mode}")
 
     client = genai.Client(api_key=api_key)
     api = GeminiLiveAPI(api_key=api_key, client=client)
@@ -361,7 +368,40 @@ def main() -> None:
         watcher = threading.Thread(target=watch_for_cancel, args=(cancel_event,), daemon=True)
         watcher.start()
 
-    if args.parallelism == 1:
+    if args.realtime:
+        import numpy as np
+        import sounddevice as sd
+        log_fn = print if debug else (lambda msg: None)
+        stream = sd.OutputStream(samplerate=24000, channels=1, dtype='int16')
+        stream.start()
+        chunk_count = 0
+        all_pcm = [] if args.output else None
+        for pcm_chunk in api.stream_realtime_pcm(
+            prepared,
+            voice_name=args.voice,
+            character_name=character,
+            style=args.style,
+            log=log_fn,
+        ):
+            if cancel_event.is_set():
+                break
+            pcm_array = np.frombuffer(pcm_chunk, dtype=np.int16)
+            stream.write(pcm_array)
+            chunk_count += 1
+            if all_pcm is not None:
+                all_pcm.append(pcm_chunk)
+        stream.stop()
+        stream.close()
+        if not chunk_count:
+            print("Error: no audio received from Live API.")
+            sys.exit(1)
+        if args.output and all_pcm:
+            import pathlib
+            from gemini_live_tools import pcm_to_wav_bytes
+            wav_bytes = pcm_to_wav_bytes(b"".join(all_pcm))
+            pathlib.Path(args.output).write_bytes(wav_bytes)
+            print(f"  Saved to {args.output}")
+    elif args.parallelism == 1:
         wav = api.synthesize_wav(prepared, character_name=character, voice_name=args.voice, style=args.style, use_live=args.live)
         if not wav:
             print(f"Error: synthesis failed — {api.last_error}")
