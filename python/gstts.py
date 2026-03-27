@@ -95,6 +95,21 @@ def generate_greeting(client, character: str, length: int = 100) -> str:
     return (response.text or "").strip()
 
 
+def generate_from_prompt(client, character: str, prompt: str, length: int = 100) -> str:
+    char_desc = CHARACTERS[character]
+    full_prompt = (
+        f"You are: {char_desc}\n\n"
+        f"Instruction: {prompt}\n\n"
+        f"Generate approximately {length} words following the instruction above, "
+        "in your character's voice and style. Plain text only — no markdown, no bullet points."
+    )
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=[{"role": "user", "parts": [{"text": full_prompt}]}],
+    )
+    return (response.text or "").strip()
+
+
 def watch_for_cancel(cancel_event: threading.Event) -> None:
     """Background thread: set cancel_event when user presses 'q'."""
     import select
@@ -179,6 +194,10 @@ def main() -> None:
     parser.add_argument(
         "--style", "-s", type=str, default=None,
         help="Additional style instruction for TTS",
+    )
+    parser.add_argument(
+        "--prompt", type=str, default=None,
+        help="Generation instruction instead of random greeting (e.g. 'speak like van Gogh in Dutch')",
     )
     parser.add_argument(
         "--prepare", "--perform", "-p", action="store_true", default=False,
@@ -347,8 +366,12 @@ def main() -> None:
         if debug:
             print(f"\n  \"{prepared}\"\n")
     else:
-        print("\n  Generating greeting...")
-        greeting = generate_greeting(client, character, length=args.length)
+        if args.prompt:
+            print(f"\n  Generating from prompt...")
+            greeting = generate_from_prompt(client, character, args.prompt, length=args.length)
+        else:
+            print("\n  Generating greeting...")
+            greeting = generate_greeting(client, character, length=args.length)
         print(f"\n  \"{greeting}\"\n")
 
         prepared = api.prepare_text(greeting, character_name=character, style=args.style)
