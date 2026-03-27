@@ -40,6 +40,7 @@
         blues_singer: 'Musical',
         sunday_preacher: 'Dramatic',
         zen_monk: 'Character',
+        jazz_crooner: 'Musical',
         heavy_metal: 'Musical',
         tanka_poet: 'Musical',
         rapper: 'Musical',
@@ -132,6 +133,7 @@
         { id: 'blues_singer', label: 'Blues Singer', defaultVoice: 'Achernar' },
         { id: 'sunday_preacher', label: 'Sunday Preacher', defaultVoice: 'Gacrux' },
         { id: 'zen_monk', label: 'Zen Monk', defaultVoice: 'Orus' },
+        { id: 'jazz_crooner', label: 'Jazz Crooner', defaultVoice: 'Charon' },
         { id: 'heavy_metal', label: 'Heavy Metal', defaultVoice: 'Fenrir' },
         { id: 'tanka_poet', label: 'Tanka Poet', defaultVoice: 'Charon' }
     ];
