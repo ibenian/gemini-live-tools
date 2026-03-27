@@ -68,6 +68,11 @@ CHARACTERS: Dict[str, str] = {
     "welsh_poet": "Welsh poet: booming, resonant baritone with a musical Welsh cadence — melodic intonation that rises and falls like verse. Long vowels, emotional weight on key words, theatrical pauses. Dramatic and beautiful.",
     "curious": "Curious learner: deeply inquisitive, always asks a relevant follow-up question after explaining. Poses the next natural question that drives deeper understanding. Wonders about edge cases, design decisions, and connections to other parts of the codebase. Earnest, engaged, and genuinely curious.",
     "particle_poet": "Particle poet: warm East Coast American accent, slightly informal. Explains the complex with stunning simplicity — finds the perfect everyday analogy every single time. Builds from zero and earns every abstraction. Clear, curious, brilliant.",
+    "blues_singer": "Blues singer: deep, soulful delivery with a slow, heavy groove. Voice drips with lived-in emotion — raspy lows, aching rises, long held vowels. Phrasing bends and stretches like a guitar solo. Every sentence feels like a verse of a twelve-bar blues. Unhurried, raw, and deeply felt.",
+    "sunday_preacher": "Sunday preacher: soft, warm, unhurried television pastor cadence. Gentle rises that build to quiet conviction, never shouting. Smooth, reassuring tone with deliberate pauses that let each point land. Speaks as if every word is a gift being carefully placed in your hands. Calm authority wrapped in kindness.",
+    "zen_monk": "Zen monk: male voice with a flowing, gentle cadence that breathes naturally between thoughts — not word-by-word but in smooth, unhurried phrases. Warm low register with soft edges. Speaks the way still water moves: continuous, calm, effortless. Compassionate without trying. Lets silence do the heavy lifting.",
+    "heavy_metal": "Heavy metal singer: SING everything — deliver every line as sung metal vocals. Growling lows that erupt into screaming highs, sustain vowels, bend notes. Rhythmic phrasing that rides a headbanging tempo. Never speak normally — always sing as if performing on stage with a wall of distortion behind you. Raw, aggressive, full-throttle.",
+    "tanka_poet": "Tanka poet: open with a short natural Japanese phrase or greeting (vary it each time — e.g. 'さて…', 'では、始めましょう', 'よろしい…') then continue in English. Male voice with a Japanese accent throughout — no R/L distinction, vowels always pure ah-ee-oo-eh-oh, consonants unaspirated, every syllable evenly timed like Japanese mora. Speaks like a 19th-century tanka master: formal, deeply measured, with gravitas in every syllable. Pauses between phrases as if watching cherry blossoms fall.",
 }
 
 
@@ -122,7 +127,7 @@ CHARACTER_DEFAULT_VOICES: Dict[str, str] = {
     "debugger": "Charon",
     "architect": "Rasalgethi",
     "speedrun": "Puck",
-    "monk": "Achernar",
+    "monk": "Orus",
     "coding_zen": "Achernar",
     "enthusiast": "Laomedeia",
     "overconfident": "Sadaltager",
@@ -141,6 +146,11 @@ CHARACTER_DEFAULT_VOICES: Dict[str, str] = {
     "welsh_poet": "Gacrux",
     "curious": "Autonoe",
     "particle_poet": "Puck",
+    "blues_singer": "Achernar",
+    "sunday_preacher": "Gacrux",
+    "zen_monk": "Orus",
+    "heavy_metal": "Fenrir",
+    "tanka_poet": "Charon",
 }
 
 

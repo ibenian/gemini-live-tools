@@ -37,6 +37,11 @@
         news_anchor: 'Dramatic',
         poetic: 'Musical',
         singer: 'Musical',
+        blues_singer: 'Musical',
+        sunday_preacher: 'Dramatic',
+        zen_monk: 'Character',
+        heavy_metal: 'Musical',
+        tanka_poet: 'Musical',
         rapper: 'Musical',
         monk: 'Character',
         coding_zen: 'Character',
@@ -123,7 +128,12 @@
         { id: 'kids_tv', label: 'Kids TV Host', defaultVoice: 'Zephyr' },
         { id: 'heartland', label: 'Heartland', defaultVoice: 'Sulafat' },
         { id: 'cafe_philosopher', label: 'Café Philosopher', defaultVoice: 'Despina' },
-        { id: 'compression_oracle', label: 'Compression Oracle', defaultVoice: 'Alnilam' }
+        { id: 'compression_oracle', label: 'Compression Oracle', defaultVoice: 'Alnilam' },
+        { id: 'blues_singer', label: 'Blues Singer', defaultVoice: 'Achernar' },
+        { id: 'sunday_preacher', label: 'Sunday Preacher', defaultVoice: 'Gacrux' },
+        { id: 'zen_monk', label: 'Zen Monk', defaultVoice: 'Orus' },
+        { id: 'heavy_metal', label: 'Heavy Metal', defaultVoice: 'Fenrir' },
+        { id: 'tanka_poet', label: 'Tanka Poet', defaultVoice: 'Charon' }
     ];
 
     const GEMINI_VOICES = [
