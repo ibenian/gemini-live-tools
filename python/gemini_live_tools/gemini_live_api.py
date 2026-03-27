@@ -505,9 +505,13 @@ class GeminiLiveAPI:
             "Strip all markdown markers (**, *, #, `, etc.) but keep their text content. "
             "Avoid filler openers like 'Okay,' 'So,' 'Sure,' or 'Alright.' Start directly in character. "
             + tag_clause +
-            "Avoid reading long numbers, UUIDs, hashes, file paths, or code verbatim. "
-            "Split merged identifiers into words and read naturally. "
-            "Do not spell identifiers letter-by-letter. "
+            "IMPORTANT: Preserve the original language of the input text. "
+            "Never translate to English. "
+            "Read code identifiers the way a programmer would say them aloud — "
+            "split camelCase and snake_case into words: "
+            "e.g. 'prepare_text'→'prepare text', 'getData()'→'get data', "
+            "'asyncHandler'→'async handler'. "
+            "Never spell identifiers letter-by-letter or read UUIDs, hashes, or file paths verbatim. "
             "Return plain text only, no markdown, no LaTeX.\n\n"
             f"TEXT:\n{text}"
         )
