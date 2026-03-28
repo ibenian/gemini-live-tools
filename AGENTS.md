@@ -12,33 +12,34 @@ It is used as a dependency by other projects (e.g. algebench), pinned to a relea
 ## Running the Demo
 
 ```bash
-./gstts.sh setup                                      # create .venv and install deps
-./gstts.sh                                            # interactive character TTS
-./gstts.sh "Hello world"                              # read text aloud with a character voice
-./gstts.sh --parallelism 4                            # parallel TTS mode
-./gstts.sh --parallelism 4 --min-sentence-chars 60 --min-buffer-seconds 10
-./gstts.sh shell                                      # drop into .venv shell
+./run.sh setup                                        # create .venv, install deps, symlink gstts
+./run.sh gstts                                        # interactive character TTS
+./run.sh gstts "Hello world"                          # read text aloud with a character voice
+gstts "Hello world"                                   # same, via symlink (after setup)
+./run.sh test                                         # run Python tests
+./run.sh test-player                                  # open TTS audio player test page in browser
 ```
 
 ## Project Structure
 
 ```
+run.sh                    Unified entry point (setup, test, gstts, etc.) — uses uv
 python/
   gemini_live_tools/
     gemini_live_api.py     GeminiLiveAPI, character definitions, PCM/WAV helpers
     math_eval.py           Safe AST-based math evaluator
-    static/
-      voice-character-selector.js   Bundled JS widget (served via get_static_content())
   gstts.py                 Gemini Streaming TTS CLI
+  tests/                   Python tests
 
 js/
-  voice-character-selector.js   Source JS widget (copy kept in sync with static/)
+  tts-audio-player.js      Streaming WAV/PCM audio player (Web Audio API)
+  voice-character-selector.js   Drop-in voice/character picker UI widget
 
 docs/
   streaming-tts-endpoint.md    FastAPI streaming endpoint guide with cancellation
 
-gstts.sh                  Gemini Streaming TTS CLI: setup / shell / run
-CONTRIBUTING.md           How to add voice characters
+test_tts_audio_player.html    Browser test page for TTS audio player
+CONTRIBUTING.md               How to add voice characters
 ```
 
 ## Key Conventions
@@ -53,7 +54,7 @@ CONTRIBUTING.md           How to add voice characters
 - **`prepare_text` is called by the caller**, not inside `stream_parallel_wav` / `astream_parallel_wav`. Keep it that way.
 - **Sentence boundaries**: `[long pause]` and `[medium pause]` tags split sentences in `_split_sentences`. The tag is kept at the start of the next chunk.
 - **Quota awareness**: each sentence = one Gemini API request. Avoid very small `min_sentence_chars` in production (free tier is 100 req/day).
-- **`.venv` is local** — recreate with `./gstts.sh setup` if broken.
+- **`.venv` is local** — recreate with `./run.sh setup` if broken.
 - **Always label PRs** — add appropriate labels (e.g. `enhancement`, `bug`, `docs`) when creating PRs, same as you would for issues.
 - **Use `--admin` when merging PRs** — branch protection requires it: `gh pr merge <number> --squash --delete-branch --admin`.
 
