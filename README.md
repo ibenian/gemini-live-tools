@@ -16,7 +16,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ## Setup
 
 Run setup first — this creates a `.venv`, installs dependencies, and symlinks
-`gstts` to `/usr/local/bin` so you can use it from anywhere:
+`gstts` so you can use it from anywhere (`/usr/local/bin` if writable, otherwise `~/.local/bin`):
 
 ```bash
 ./run.sh setup
@@ -45,7 +45,7 @@ docs/
 
 | Command | Description |
 |---------|-------------|
-| `./run.sh setup` | Create `.venv`, install deps, symlink `gstts` to `/usr/local/bin` |
+| `./run.sh setup` | Create `.venv`, install deps, symlink `gstts` to PATH |
 | `./run.sh update` | Upgrade all dependencies in `.venv` |
 | `./run.sh test` | Run Python tests (extra args passed to pytest, e.g. `-v`) |
 | `./run.sh test-player` | Open TTS audio player test page in browser |
@@ -156,7 +156,7 @@ After picking from the menu, you're prompted to save the selection as the new de
 ### Development
 
 ```bash
-./run.sh setup                                  # create .venv, install deps, symlink /usr/local/bin/gstts
+./run.sh setup                                  # create .venv, install deps, symlink gstts
 ./run.sh test                                   # run Python tests
 ./run.sh test -v                                # run tests with verbose output
 ./run.sh test-player                            # open TTS audio player test page in browser
