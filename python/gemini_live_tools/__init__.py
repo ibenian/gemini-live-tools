@@ -2,8 +2,7 @@
 
 from pathlib import Path as _Path
 
-_PKG_DIR = _Path(__file__).resolve().parent
-_JS_DIR = _PKG_DIR.parent.parent / "js"
+_JS_DIR = _Path(__file__).resolve().parent.parent.parent / "js"
 
 
 def get_static_content(filename: str) -> str:
@@ -13,8 +12,6 @@ def get_static_content(filename: str) -> str:
     path = (_JS_DIR / filename).resolve()
     if not path.is_relative_to(_JS_DIR):
         raise ValueError(f"filename must resolve inside js/: {filename}")
-    if not path.exists():
-        raise FileNotFoundError(f"Static asset not found: {filename}")
     return path.read_text(encoding="utf-8")
 
 

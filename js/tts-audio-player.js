@@ -181,9 +181,10 @@
 
         getMediaStream() {
             if (!this._ctx || !this._limiterNode) return null;
-            const dest = this._ctx.createMediaStreamDestination();
-            this._limiterNode.connect(dest);
-            return dest.stream;
+            if (this._mediaStreamDest) return this._mediaStreamDest.stream;
+            this._mediaStreamDest = this._ctx.createMediaStreamDestination();
+            this._limiterNode.connect(this._mediaStreamDest);
+            return this._mediaStreamDest.stream;
         }
 
         // --- Main playback entry point ------------------------------------
@@ -227,9 +228,21 @@
             } finally {
                 if (this._requestId === myId) {
                     this._abortController = null;
-                    this._setState('idle');
+                    this._waitForScheduledEnd(myId);
                 }
             }
+        }
+
+        _waitForScheduledEnd(myId) {
+            if (!this._ctx || !this._scheduleEndTime ||
+                this._scheduleEndTime <= this._ctx.currentTime) {
+                if (this._requestId === myId) this._setState('idle');
+                return;
+            }
+            const remainingMs = (this._scheduleEndTime - this._ctx.currentTime) * 1000 + 50;
+            setTimeout(() => {
+                if (this._requestId === myId) this._setState('idle');
+            }, remainingMs);
         }
 
         /**
@@ -240,8 +253,42 @@
          * @returns {Promise<void>}
          */
         async playStreamWithAbort(response, abortController) {
+            // Abort previous controller before setting new one
+            if (this._abortController) {
+                this._abortController.abort();
+            }
             this._abortController = abortController;
-            return this.playStream(response);
+
+            const myId = ++this._requestId;
+
+            for (const src of this._prevSources) { try { src.stop(); } catch (_) {} }
+            this._prevSources = this._activeSources;
+            this._activeSources = [];
+            this._scheduleEndTime = 0;
+
+            const ctx = this._ensureContext();
+            if (!ctx) { this._prevSources = []; this._setState('idle'); return; }
+            if (ctx.state === 'suspended') await ctx.resume();
+
+            this._setState('loading');
+
+            const contentType = (response.headers.get('Content-Type') || '').split(';')[0].trim();
+            const isRealtime = contentType === 'audio/pcm';
+
+            try {
+                if (isRealtime) {
+                    await this._playPCMStream(response, myId);
+                } else {
+                    await this._playWAVStream(response, myId);
+                }
+            } catch (err) {
+                if (err.name !== 'AbortError') console.warn('TTS stream error:', err);
+            } finally {
+                if (this._requestId === myId) {
+                    this._abortController = null;
+                    this._waitForScheduledEnd(myId);
+                }
+            }
         }
 
         // --- PCM streaming ------------------------------------------------
@@ -254,8 +301,6 @@
             const ctx = this._ctx;
             const nativeRate = ctx.sampleRate;
             const needsResample = sampleRate !== nativeRate;
-
-            const self = this;
 
             async function resample(float32) {
                 if (!needsResample) return float32;

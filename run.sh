@@ -39,14 +39,30 @@ cmd_setup() {
     ensure_venv
     sync_deps
 
-    # Install system-wide symlink for gstts
-    local link="/usr/local/bin/gstts"
+    # Install symlink for gstts
     local target="$REPO_DIR/run.sh"
-    if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
-        echo "Symlink $link already points to $target"
+    local link="/usr/local/bin/gstts"
+    local user_link="$HOME/.local/bin/gstts"
+
+    if [ -w "$(dirname "$link")" ]; then
+        if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
+            echo "Symlink $link already points to $target"
+        else
+            echo "Installing symlink: $link → $target"
+            ln -sf "$target" "$link"
+        fi
     else
-        echo "Installing symlink: $link → $target"
-        ln -sf "$target" "$link"
+        mkdir -p "$HOME/.local/bin"
+        if [ -L "$user_link" ] && [ "$(readlink "$user_link")" = "$target" ]; then
+            echo "Symlink $user_link already points to $target"
+        else
+            echo "Installing symlink: $user_link → $target"
+            ln -sf "$target" "$user_link"
+        fi
+        case ":$PATH:" in
+            *":$HOME/.local/bin:"*) ;;
+            *) echo "Note: add ~/.local/bin to your PATH" ;;
+        esac
     fi
 
     echo "Done."
@@ -66,7 +82,16 @@ cmd_test() {
 }
 
 cmd_test_player() {
-    open "$REPO_DIR/test_tts_audio_player.html"
+    local target="$REPO_DIR/test_tts_audio_player.html"
+    if command -v xdg-open &>/dev/null; then
+        xdg-open "$target"
+    elif command -v open &>/dev/null; then
+        open "$target"
+    else
+        echo "Could not detect a browser opener. Open manually:" >&2
+        echo "  $target" >&2
+        return 1
+    fi
 }
 
 cmd_gstts() {
