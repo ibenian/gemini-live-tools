@@ -2,39 +2,68 @@
 
 Python library for Gemini Live TTS with voice characters, and safe math expression evaluation.
 
+## Prerequisites
+
+- [uv](https://docs.astral.sh/uv/) — fast Python package manager
+- `GEMINI_API_KEY` environment variable
+
+Install uv if you don't have it:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+## Setup
+
+Run setup first — this creates a `.venv`, installs dependencies, and symlinks
+`gstts` to `/usr/local/bin` so you can use it from anywhere:
+
+```bash
+./run.sh setup
+```
+
 ## Contents
 
 ```
-python/                        Python package
+run.sh                         Unified entry point (setup, test, gstts, etc.)
+python/
   gemini_live_tools/
     gemini_live_api.py         GeminiLiveAPI, character definitions, PCM/WAV helpers
     math_eval.py               Safe AST-based math expression evaluator
   gstts.py                     Gemini Streaming TTS CLI
+  tests/                       Python tests
 
 js/
+  tts-audio-player.js          Streaming WAV/PCM audio player (Web Audio API)
   voice-character-selector.js  Drop-in voice/character picker UI widget
 
 docs/
-  streaming-tts-endpoint.md   FastAPI streaming endpoint guide with cancellation
-
-gstts.sh                       Gemini Streaming TTS CLI
+  streaming-tts-endpoint.md    FastAPI streaming endpoint guide with cancellation
 ```
+
+## run.sh commands
+
+| Command | Description |
+|---------|-------------|
+| `./run.sh setup` | Create `.venv`, install deps, symlink `gstts` to `/usr/local/bin` |
+| `./run.sh update` | Upgrade all dependencies in `.venv` |
+| `./run.sh test` | Run Python tests (extra args passed to pytest, e.g. `-v`) |
+| `./run.sh test-player` | Open TTS audio player test page in browser |
+| `./run.sh gstts [args]` | Run Gemini Streaming TTS CLI |
+| `./run.sh help` | Show available commands |
 
 ## gstts — Gemini Streaming Text-to-Speech CLI
 
 ### Quick start
 
 ```bash
-# First time: set up venv and install the `gstts` command system-wide
-./gstts.sh setup
+# First time setup (required before first use)
+./run.sh setup
 
 # After setup, use `gstts` from anywhere
 gstts "Hello world"                             # read text aloud (uses default character)
 gstts                                           # interactive: pick a character, generate & play a greeting
 ```
-
-The venv is auto-created on first run if you skip setup — but `setup` also installs a
-`/usr/local/bin/gstts` symlink so you can call it from any directory.
 
 ### Characters and voices
 
@@ -98,12 +127,19 @@ cat article.txt | gstts -rt                     # pipe with realtime playback
 
 ### Options
 
-```bash
+Run `gstts --help` for the full list:
+
+```
+gstts "text" -c narrator                        # use a specific character
+gstts "text" -c narrator -v Charon              # character + voice override
+gstts "text" -s "speak slowly"                  # add a style instruction
+gstts "text" -p                                 # prepare text for speech (rewrite markdown, etc.)
+gstts "text" --summarize                        # summarize before reading
+gstts "text" -rt                                # realtime low-latency mode
 gstts "text" --no-live                          # disable Live API (use generate_content)
 gstts "text" --parallelism 4                    # parallel TTS (4 concurrent chunks)
 gstts "text" --output greeting.wav              # save audio to file
 gstts "text" --debug                            # verbose output
-gstts --parallelism 4 --min-sentence-chars 60 --min-buffer-seconds 10
 ```
 
 ### Config
@@ -120,17 +156,19 @@ After picking from the menu, you're prompted to save the selection as the new de
 ### Development
 
 ```bash
-./gstts.sh setup                                # create .venv, install deps, symlink /usr/local/bin/gstts
-./gstts.sh shell                                # drop into a shell with the .venv activated
+./run.sh setup                                  # create .venv, install deps, symlink /usr/local/bin/gstts
+./run.sh test                                   # run Python tests
+./run.sh test -v                                # run tests with verbose output
+./run.sh test-player                            # open TTS audio player test page in browser
+./run.sh update                                 # upgrade dependencies
 ```
 
-## Install (Python)
+## Install (as a dependency)
 
-Always pin to a tagged release — do not reference `main` directly as it may contain unreleased changes.
+Pin to a tagged release:
 
 ```bash
-# Pin to a specific release tag (recommended)
-pip install "gemini-live-tools @ git+https://github.com/ibenian/gemini-live-tools.git@v0.1.6#subdirectory=python"
+pip install "gemini-live-tools @ git+https://github.com/ibenian/gemini-live-tools.git@v0.1.16#subdirectory=python"
 ```
 
 To find the latest tag:
@@ -279,10 +317,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add voice characters and more.
 
 ## Requirements
 
-- Python 3.10+
-- `google-genai >= 1.27.0`
-- `numpy >= 1.26.0`
-- `simple-term-menu >= 1.6.0`
+- [uv](https://docs.astral.sh/uv/) (manages Python and dependencies)
+- Python 3.10+ (auto-installed by uv if missing)
 - `GEMINI_API_KEY` environment variable
 
 ---
