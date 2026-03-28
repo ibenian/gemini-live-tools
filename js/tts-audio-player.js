@@ -135,6 +135,7 @@
                 if (this._gainNode && this._ctx) {
                     this._gainNode.gain.setValueAtTime(restoreVol, this._ctx.currentTime);
                 }
+                this._persist('Volume', restoreVol);
             }
             this._persist('Muted', this._muted);
             if (this._onVolumeChange) this._onVolumeChange(this._muted ? 0 : this._volume, this._muted);
