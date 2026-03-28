@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html><head><title>TTS Player Test</title></head>
+<body>
+  <h2>TTS Audio Player Test</h2>
+  <input id="file" type="file" accept="audio/*,video/*,.wav,.mp3,.mp4,.m4a,.ogg,.flac,.aac,.webm">
+  <button id="stop">Stop</button>
+  <input id="vol" type="range" min="0" max="1" step="0.05" value="0.5">
+  <span id="state">idle</span>
+
+  <script src="js/tts-audio-player.js"></script>
+  <script>
+    const player = new GeminiTTSPlayer.TTSAudioPlayer({
+      onStateChange: s => document.getElementById('state').textContent = s,
+    });
+    document.getElementById('vol').oninput = e => player.setVolume(+e.target.value);
+    document.getElementById('stop').onclick = () => player.stop();
+    document.getElementById('file').onchange = async e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const resp = new Response(file.stream(), {
+        headers: { 'Content-Type': file.type || 'audio/wav' },
+      });
+      await player.playStream(resp);
+    };
+  </script>
+</body></html>
