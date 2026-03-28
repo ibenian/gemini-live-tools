@@ -49,7 +49,7 @@ CONTRIBUTING.md               How to add voice characters
 - **Always announce who is committing before running `git commit`** — print a line in the format:
   `Committing on behalf of <name> (<email>)`
   using the output of `git config user.name` and `git config user.email`.
-- **Versioning**: tag first (`v0.1.7`), then bump `pyproject.toml` to next version (`0.1.8`) and commit. See version-bump skill.
+- **Versioning**: tag first (`v0.1.7`), then bump `pyproject.toml` to next version (`0.1.8`) and commit. See version-release skill.
 - **Release tags only** — consumers pin to a git tag. Never tell users to install from `main`.
 - **`prepare_text` is called by the caller**, not inside `stream_parallel_wav` / `astream_parallel_wav`. Keep it that way.
 - **Sentence boundaries**: `[long pause]` and `[medium pause]` tags split sentences in `_split_sentences`. The tag is kept at the start of the next chunk.
