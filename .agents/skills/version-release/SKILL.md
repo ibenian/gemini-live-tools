@@ -55,18 +55,33 @@ Must be on `main` and up to date:
 git checkout main && git pull
 ```
 
-Generate release notes from commits since last tag:
-
-```bash
-git log v0.1.(Z-1)..HEAD --oneline
-```
-
-Tag and create the GitHub release:
+Tag the current commit:
 
 ```bash
 git tag vX.Y.Z
 git push origin vX.Y.Z
-gh release create vX.Y.Z --title "vX.Y.Z" --notes "release notes here"
+```
+
+Then create a GitHub release. Generate release notes from all commits since the last tag:
+
+```bash
+git log v0.1.(Z-1)..vX.Y.Z --oneline
+```
+
+The release body should include:
+- A `## What's Changed` section listing all changes (group by PRs where possible)
+- A commit span line at the bottom: `**Full changelog**: v0.1.(Z-1)...vX.Y.Z`
+
+```bash
+gh release create vX.Y.Z --title "vX.Y.Z" --notes "$(cat <<'NOTES'
+## What's Changed
+- item 1 (#PR)
+- item 2 (#PR)
+- ...
+
+**Full changelog**: https://github.com/ibenian/gemini-live-tools/compare/v0.1.(Z-1)...vX.Y.Z
+NOTES
+)"
 ```
 
 ## Step 4: Bump to Next Version
