@@ -277,7 +277,19 @@
 
             const ctx = this._ensureContext();
             if (!ctx) { this._prevSources = []; this._setState('idle'); return; }
-            if (ctx.state === 'suspended') await ctx.resume();
+            if (ctx.state === 'suspended') {
+                try {
+                    await ctx.resume();
+                } catch (err) {
+                    console.warn('AudioContext resume failed:', err);
+                    this._prevSources = [];
+                    this._activeSources = [];
+                    this._scheduleEndTime = 0;
+                    this._abortController = null;
+                    this._setState('idle');
+                    return;
+                }
+            }
 
             this._setState('loading');
 
