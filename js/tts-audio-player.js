@@ -210,7 +210,15 @@
 
             const ctx = this._ensureContext();
             if (!ctx) { this._prevSources = []; this._setState('idle'); return; }
-            if (ctx.state === 'suspended') await ctx.resume();
+            if (ctx.state === 'suspended') {
+                try {
+                    await ctx.resume();
+                } catch (err) {
+                    console.warn('Failed to resume audio context:', err);
+                    this._setState('idle');
+                    return;
+                }
+            }
 
             this._setState('loading');
 
