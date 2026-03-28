@@ -1,11 +1,18 @@
 """gemini-live-tools — shared Gemini Live TTS API and math evaluator."""
 
-from importlib.resources import files as _files
+from pathlib import Path as _Path
+
+_JS_DIR = _Path(__file__).resolve().parent.parent.parent / "js"
 
 
 def get_static_content(filename: str) -> str:
-    """Return the text content of a bundled static asset."""
-    return (_files("gemini_live_tools") / "static" / filename).read_text(encoding="utf-8")
+    """Return the text content of a JS asset from the repo js/ directory."""
+    if not _JS_DIR.is_dir():
+        raise FileNotFoundError(f"js/ directory not found: {_JS_DIR}")
+    path = (_JS_DIR / filename).resolve()
+    if not path.is_relative_to(_JS_DIR):
+        raise ValueError(f"filename must resolve inside js/: {filename}")
+    return path.read_text(encoding="utf-8")
 
 
 from .gemini_live_api import (
