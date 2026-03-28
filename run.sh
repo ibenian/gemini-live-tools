@@ -45,7 +45,9 @@ cmd_setup() {
     local user_link="$HOME/.local/bin/gstts"
 
     if [ -w "$(dirname "$link")" ]; then
-        if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
+        if [ -e "$link" ] && [ ! -L "$link" ]; then
+            echo "Warning: $link exists and is not a symlink; refusing to overwrite." >&2
+        elif [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
             echo "Symlink $link already points to $target"
         else
             echo "Installing symlink: $link → $target"
@@ -53,7 +55,9 @@ cmd_setup() {
         fi
     else
         mkdir -p "$HOME/.local/bin"
-        if [ -L "$user_link" ] && [ "$(readlink "$user_link")" = "$target" ]; then
+        if [ -e "$user_link" ] && [ ! -L "$user_link" ]; then
+            echo "Warning: $user_link exists and is not a symlink; refusing to overwrite." >&2
+        elif [ -L "$user_link" ] && [ "$(readlink "$user_link")" = "$target" ]; then
             echo "Symlink $user_link already points to $target"
         else
             echo "Installing symlink: $user_link → $target"
