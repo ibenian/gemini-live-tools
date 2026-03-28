@@ -317,9 +317,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add voice characters and more.
 
 ## Requirements
 
-- [uv](https://docs.astral.sh/uv/) (manages Python and dependencies)
-- Python 3.10+ (auto-installed by uv if missing)
+- Python 3.10+
 - `GEMINI_API_KEY` environment variable
+- [uv](https://docs.astral.sh/uv/) — only needed for `./run.sh` (dev/CLI workflow). Library consumers can use standard pip.
 
 ---
 
