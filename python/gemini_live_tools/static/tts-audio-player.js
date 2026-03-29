@@ -318,7 +318,7 @@
             const sampleRate = parseInt(response.headers.get('X-Audio-Sample-Rate') || '24000', 10);
             const reader = response.body.getReader();
             let pcmAccum = new Uint8Array(0);
-            const scheduleBytes = sampleRate * 2 * 0.5; // 500ms of s16le mono
+            const scheduleBytes = sampleRate * 2 * 0.2; // 200ms of s16le mono
             const ctx = this._ctx;
             const nativeRate = ctx.sampleRate;
             const needsResample = sampleRate !== nativeRate;
