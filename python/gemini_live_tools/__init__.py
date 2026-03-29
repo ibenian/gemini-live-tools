@@ -2,16 +2,16 @@
 
 from pathlib import Path as _Path
 
-_JS_DIR = _Path(__file__).resolve().parent.parent.parent / "js"
+_JS_DIR = _Path(__file__).resolve().parent / "static"
 
 
 def get_static_content(filename: str) -> str:
-    """Return the text content of a JS asset from the repo js/ directory."""
+    """Return the text content of a JS asset from the static/ directory."""
     if not _JS_DIR.is_dir():
-        raise FileNotFoundError(f"js/ directory not found: {_JS_DIR}")
+        raise FileNotFoundError(f"static/ directory not found: {_JS_DIR}")
     path = (_JS_DIR / filename).resolve()
     if not path.is_relative_to(_JS_DIR):
-        raise ValueError(f"filename must resolve inside js/: {filename}")
+        raise ValueError(f"filename must resolve inside static/: {filename}")
     return path.read_text(encoding="utf-8")
 
 
