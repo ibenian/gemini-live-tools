@@ -116,7 +116,7 @@
         { id: 'storyteller', label: 'Storyteller', defaultVoice: 'Callirrhoe' },
         { id: 'debugger', label: 'Debugger', defaultVoice: 'Charon' },
         { id: 'architect', label: 'Architect', defaultVoice: 'Rasalgethi' },
-        { id: 'monk', label: 'Zen Monk', defaultVoice: 'Achernar' },
+        { id: 'monk', label: 'Ascetic Monk', defaultVoice: 'Achernar' },
         { id: 'coding_zen', label: 'Coding Zen', defaultVoice: 'Achernar' },
         { id: 'speedrun', label: 'Speedrun', defaultVoice: 'Puck' },
         { id: 'enthusiast', label: 'Enthusiast', defaultVoice: 'Laomedeia' },
