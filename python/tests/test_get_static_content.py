@@ -21,15 +21,15 @@ def test_missing_file_raises():
 
 
 def test_path_traversal_blocked():
-    with pytest.raises(ValueError, match="must resolve inside js/"):
+    with pytest.raises(ValueError, match="must resolve inside static/"):
         get_static_content("../pyproject.toml")
 
 
 def test_path_traversal_absolute_blocked():
-    with pytest.raises(ValueError, match="must resolve inside js/"):
+    with pytest.raises(ValueError, match="must resolve inside static/"):
         get_static_content("/etc/passwd")
 
 
 def test_path_traversal_double_dot_blocked():
-    with pytest.raises(ValueError, match="must resolve inside js/"):
+    with pytest.raises(ValueError, match="must resolve inside static/"):
         get_static_content("../../README.md")
