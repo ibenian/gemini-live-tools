@@ -80,6 +80,26 @@ def pick_character():
     return names[idx], quick_select
 
 
+CONTENT_MODELS = ["gemini-2.5-flash", "gemini-1.5-flash"]
+
+
+def _generate_content_with_fallback(client, prompt: str) -> str:
+    last_exc = None
+    for model in CONTENT_MODELS:
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            )
+            return (response.text or "").strip()
+        except Exception as exc:
+            if "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc):
+                last_exc = exc
+                continue
+            raise
+    raise last_exc
+
+
 def generate_greeting(client, character: str, length: int = 100) -> str:
     char_desc = CHARACTERS[character]
     prompt = (
@@ -88,11 +108,7 @@ def generate_greeting(client, character: str, length: int = 100) -> str:
         "your character's voice, style, and personality. Make it original and vivid. "
         "Plain text only — no markdown, no bullet points."
     )
-    response = client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=[{"role": "user", "parts": [{"text": prompt}]}],
-    )
-    return (response.text or "").strip()
+    return _generate_content_with_fallback(client, prompt)
 
 
 def generate_from_prompt(client, character: str, prompt: str, length: int = 100) -> str:
@@ -103,11 +119,7 @@ def generate_from_prompt(client, character: str, prompt: str, length: int = 100)
         f"Generate approximately {length} words following the instruction above, "
         "in your character's voice and style. Plain text only — no markdown, no bullet points."
     )
-    response = client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=[{"role": "user", "parts": [{"text": full_prompt}]}],
-    )
-    return (response.text or "").strip()
+    return _generate_content_with_fallback(client, full_prompt)
 
 
 def watch_for_cancel(cancel_event: threading.Event) -> None:
@@ -344,11 +356,8 @@ def main() -> None:
                 f"TEXT:\n{input_text}"
             )
             try:
-                resp = client.models.generate_content(
-                    model="gemini-2.0-flash",
-                    contents=[{"role": "user", "parts": [{"text": summary_prompt}]}],
-                )
-                input_text = (resp.text or "").strip() or input_text
+                result = _generate_content_with_fallback(client, summary_prompt)
+                input_text = result or input_text
                 if debug:
                     print(f"\n  Summary: \"{input_text}\"\n")
             except Exception as e:

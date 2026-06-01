@@ -88,7 +88,7 @@ MODEL_SUPPORTS_MARKUP_TAGS = {
     "gemini-2.5-flash-native-audio-preview-12-2025": True,
 }
 
-DEFAULT_PREP_MODEL = "gemini-2.0-flash"
+DEFAULT_PREP_MODEL = "gemini-2.5-flash"
 DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 DEFAULT_FALLBACK_TTS_MODELS = [
     "gemini-2.5-flash-preview-tts",
