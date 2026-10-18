@@ -821,25 +821,27 @@ class GeminiLiveAPI:
         chunk_count = 0
         total_bytes = 0
         try:
-            stream = await asyncio.to_thread(
-                lambda: client.interactions.create(
-                    model=model or self.tts_model,
-                    input=[{
-                        "type": "user_input",
-                        "content": [{
-                            "type": "text",
-                            "text": clean_text,
-                            "annotations": [
-                                {"type": "speech_metadata", "style": speech_style}
-                            ],
-                        }],
+            # The async client throughout: the sync stream's __next__ is a
+            # blocking network read, and running that on the caller's event
+            # loop stalls every other task between audio chunks — including
+            # the disconnect check and /api/tts/kill in server callers.
+            stream = await client.aio.interactions.create(
+                model=model or self.tts_model,
+                input=[{
+                    "type": "user_input",
+                    "content": [{
+                        "type": "text",
+                        "text": clean_text,
+                        "annotations": [
+                            {"type": "speech_metadata", "style": speech_style}
+                        ],
                     }],
-                    response_format={"type": "audio", "mime_type": "audio/l16"},
-                    generation_config={"speech_config": [{"voice": resolved_voice}]},
-                    stream=True,
-                )
+                }],
+                response_format={"type": "audio", "mime_type": "audio/l16"},
+                generation_config={"speech_config": [{"voice": resolved_voice}]},
+                stream=True,
             )
-            for event in stream:
+            async for event in stream:
                 if getattr(event, "event_type", None) != "step.delta":
                     continue
                 delta = getattr(event, "delta", None)
