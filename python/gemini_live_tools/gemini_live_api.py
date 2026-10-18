@@ -86,13 +86,32 @@ MODEL_SUPPORTS_MARKUP_TAGS = {
     "gemini-2.5-pro-preview-tts": True,
     "gemini-2.5-flash-preview-tts": True,
     "gemini-2.5-flash-native-audio-preview-12-2025": True,
+    # 3.8 TTS supports inline point-in-time events (<laugh>, <short pause>);
+    # sustained delivery instructions belong in speech_metadata instead.
+    "gemini-3.8-flash-tts": True,
+    "gemini-3.8-flash-lite-tts": True,
 }
 
 DEFAULT_PREP_MODEL = "gemini-2.5-flash"
 DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+
+# Dedicated TTS model for streaming (Interactions API).  Unlike the Live
+# native-audio model, it recites the supplied text exactly instead of deciding
+# what to say, so it needs no "read this aloud" framing and never returns an
+# empty turn for short input.  Time-to-first-audio is roughly flat (~1.5-2.0s)
+# regardless of length, where the Live model grows from ~2.4s to ~5.5s.
+#
+# Streaming TTS only: podcast/dialog generation is a separate pipeline
+# (MCPServer/scripts/generate_gemini_dialog.py) with its own model and venv,
+# and is deliberately unaffected by this.
+DEFAULT_TTS_MODEL = "gemini-3.8-flash-lite-tts"
+# Non-live synthesis (generate_content with response_modalities=["AUDIO"]).
+# The 3.8 models work through this same call shape and are roughly 2x faster
+# than the 2.5 previews they replace; they return a RIFF-wrapped audio/wav
+# payload rather than raw audio/l16, which _audio_bytes_to_pcm already unwraps.
 DEFAULT_FALLBACK_TTS_MODELS = [
-    "gemini-2.5-flash-preview-tts",
-    "gemini-2.5-pro-preview-tts",
+    "gemini-3.8-flash-lite-tts",
+    "gemini-3.8-flash-tts",
 ]
 DEFAULT_SAMPLE_RATE = 24000
 DEFAULT_VOICE = "Kore"
@@ -439,14 +458,16 @@ class GeminiLiveAPI:
         client=None,
         prep_model: str = DEFAULT_PREP_MODEL,
         live_model: str = DEFAULT_LIVE_MODEL,
+        tts_model: str = DEFAULT_TTS_MODEL,
     ):
         self.api_key = api_key
         self.client = client
         self.prep_model = prep_model
         self.live_model = live_model
+        self.tts_model = tts_model
         self.markup_tags = MODEL_SUPPORTS_MARKUP_TAGS.get(self.live_model, False)
         self.last_error: Optional[str] = None
-        self.last_delivery_mode: Optional[str] = None  # "live" | "fallback"
+        self.last_delivery_mode: Optional[str] = None  # "tts" | "live" | "fallback"
 
     def _resolve_character(self, character_name: Optional[str]) -> str:
         if character_name and character_name in CHARACTERS:
@@ -764,6 +785,122 @@ class GeminiLiveAPI:
 
         _log(f"[TTS-Realtime] done: {chunk_count} chunks, {total_bytes} bytes")
 
+    async def astream_tts_pcm(
+        self,
+        text: str,
+        *,
+        voice_name: Optional[str] = None,
+        character_name: Optional[str] = None,
+        style: Optional[str] = None,
+        model: Optional[str] = None,
+        log: Optional[Callable[[str], None]] = None,
+    ) -> AsyncIterator[bytes]:
+        """Stream PCM from a dedicated TTS model via the Interactions API.
+
+        This is the preferred path for reading known text aloud.  The TTS
+        models recite the input verbatim, so unlike astream_realtime_pcm there
+        is no reading-prompt wrapper, no empty-turn retry loop and no
+        generate_content fallback — and no websocket handshake to amortize,
+        which keeps the call stateless and safe to fan out across requests.
+
+        Yields raw PCM s16le 24kHz chunks, the same format the Live path emits.
+        """
+        _log = log or (lambda msg: None)
+        import base64
+        from google import genai
+
+        client = self.client or genai.Client(api_key=self.api_key)
+        clean_text = self._clean_for_tts(text)
+        resolved_voice = self._resolve_voice(voice_name, character_name)
+        # Character guidance and style are sustained delivery instructions, so
+        # they belong in speech_metadata rather than inlined into the text.
+        speech_style = self._resolve_character(character_name)
+        if style:
+            speech_style = f"{speech_style} {style}"
+
+        chunk_count = 0
+        total_bytes = 0
+        try:
+            stream = await asyncio.to_thread(
+                lambda: client.interactions.create(
+                    model=model or self.tts_model,
+                    input=[{
+                        "type": "user_input",
+                        "content": [{
+                            "type": "text",
+                            "text": clean_text,
+                            "annotations": [
+                                {"type": "speech_metadata", "style": speech_style}
+                            ],
+                        }],
+                    }],
+                    response_format={"type": "audio", "mime_type": "audio/l16"},
+                    generation_config={"speech_config": [{"voice": resolved_voice}]},
+                    stream=True,
+                )
+            )
+            for event in stream:
+                if getattr(event, "event_type", None) != "step.delta":
+                    continue
+                delta = getattr(event, "delta", None)
+                if getattr(delta, "type", None) != "audio":
+                    continue
+                data = getattr(delta, "data", None)
+                if not data:
+                    continue
+                pcm = base64.b64decode(data)
+                chunk_count += 1
+                total_bytes += len(pcm)
+                yield pcm
+        except Exception as exc:
+            self.last_error = _friendly_error(exc)
+            _log(f"[TTS] error: {self.last_error}")
+
+        self.last_delivery_mode = "tts" if chunk_count else None
+        _log(f"[TTS] done: {chunk_count} chunks, {total_bytes} bytes")
+
+    def stream_tts_pcm(
+        self,
+        text: str,
+        *,
+        voice_name: Optional[str] = None,
+        character_name: Optional[str] = None,
+        style: Optional[str] = None,
+        model: Optional[str] = None,
+        log: Optional[Callable[[str], None]] = None,
+    ) -> Iterator[bytes]:
+        """Sync wrapper for astream_tts_pcm."""
+        return self._iter_async(
+            lambda: self.astream_tts_pcm(
+                text,
+                voice_name=voice_name,
+                character_name=character_name,
+                style=style,
+                model=model,
+                log=log,
+            )
+        )
+
+    def _iter_async(self, make_agen) -> Iterator[bytes]:
+        """Drain an async generator from sync code via a worker thread."""
+        q: queue.Queue[Optional[bytes]] = queue.Queue()
+
+        async def _producer():
+            try:
+                async for chunk in make_agen():
+                    q.put(chunk)
+            finally:
+                q.put(None)
+
+        thread = threading.Thread(target=lambda: asyncio.run(_producer()), daemon=True)
+        thread.start()
+        while True:
+            chunk = q.get()
+            if chunk is None:
+                break
+            yield chunk
+        thread.join(timeout=2)
+
     def stream_realtime_pcm(
         self,
         text: str,
@@ -881,6 +1018,69 @@ class GeminiLiveAPI:
         and prepare_text already converts LaTeX/markdown when used."""
         return text
 
+    def _tts_pcm_unary(
+        self,
+        text: str,
+        *,
+        voice_name: Optional[str] = None,
+        character_name: Optional[str] = None,
+        style: Optional[str] = None,
+        model: Optional[str] = None,
+        pre_cleaned: bool = False,
+        log: Optional[Callable[[str], None]] = None,
+    ) -> Optional[bytes]:
+        """Non-streaming synthesis via a dedicated TTS model (Interactions API).
+
+        Returns raw PCM s16le 24kHz, or None on failure.
+
+        Character guidance and style MUST travel in speech_metadata rather than
+        being concatenated into the text: the dedicated TTS models recite their
+        input verbatim, so prompt scaffolding inlined into the text gets read
+        out loud (a one-word utterance became 25s of audio that way).
+        """
+        _log = log or (lambda msg: None)
+        import base64
+        from google import genai
+
+        clean_text = text if pre_cleaned else self._clean_for_tts(text)
+        speech_style = self._resolve_character(character_name)
+        if style:
+            speech_style = f"{speech_style} {style}"
+        try:
+            client = self.client or genai.Client(api_key=self.api_key)
+            interaction = client.interactions.create(
+                model=model or self.tts_model,
+                input=[{
+                    "type": "user_input",
+                    "content": [{
+                        "type": "text",
+                        "text": clean_text,
+                        "annotations": [
+                            {"type": "speech_metadata", "style": speech_style}
+                        ],
+                    }],
+                }],
+                response_format={"type": "audio", "mime_type": "audio/l16"},
+                generation_config={
+                    "speech_config": [
+                        {"voice": self._resolve_voice(voice_name, character_name)}
+                    ]
+                },
+            )
+            audio = getattr(interaction, "output_audio", None)
+            data = getattr(audio, "data", None)
+            if not data:
+                _log("[TTS] unary returned no audio")
+                return None
+            return self._audio_bytes_to_pcm(
+                base64.b64decode(data),
+                getattr(audio, "mime_type", "audio/l16") or "audio/l16",
+            )
+        except Exception as exc:
+            self.last_error = _friendly_error(exc)
+            _log(f"[TTS] unary failed: {self.last_error}")
+            return None
+
     def _fallback_tts_pcm(
         self,
         *,
@@ -899,6 +1099,26 @@ class GeminiLiveAPI:
         else:
             models = list(DEFAULT_FALLBACK_TTS_MODELS)
         max_attempts = int(os.environ.get("GEMINI_TTS_FALLBACK_RETRIES", "3"))
+
+        # Dedicated TTS models recite verbatim, so they must go through the
+        # Interactions API where guidance rides in speech_metadata instead of
+        # being concatenated into the spoken text.  Only the legacy 2.5 preview
+        # models use the generate_content prompt-scaffolding path below.
+        for model in [m for m in models if not m.startswith("gemini-2.5-")]:
+            pcm = self._tts_pcm_unary(
+                text,
+                voice_name=voice_name,
+                character_name=character_name,
+                style=style,
+                model=model,
+                pre_cleaned=pre_cleaned,
+                log=log,
+            )
+            if pcm:
+                return pcm
+        models = [m for m in models if m.startswith("gemini-2.5-")]
+        if not models:
+            return None
 
         try:
             from google import genai

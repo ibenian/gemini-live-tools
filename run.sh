@@ -27,6 +27,7 @@ ensure_venv() {
 sync_deps() {
     ensure_venv
     uv pip install -r "$REPO_DIR/python/pyproject.toml" --python "$VENV/bin/python" -q
+    touch "$VENV/.deps-stamp"
 }
 
 run_python() {
@@ -98,8 +99,21 @@ cmd_test_player() {
     fi
 }
 
+# Deps are synced by `setup` / `update`.  Doing it here cost ~0.6s on every
+# single utterance, which dominates short announcements — so only re-sync when
+# pyproject.toml is newer than the stamp written by the last sync.
+deps_stale() {
+    local stamp="$VENV/.deps-stamp"
+    [ ! -f "$stamp" ] && return 0
+    [ "$REPO_DIR/python/pyproject.toml" -nt "$stamp" ] && return 0
+    return 1
+}
+
 cmd_gstts() {
-    sync_deps
+    if deps_stale; then
+        sync_deps
+        touch "$VENV/.deps-stamp"
+    fi
     run_python "$REPO_DIR/python/gstts.py" "$@"
 }
 

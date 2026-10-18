@@ -249,7 +249,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--realtime", "-rt", action="store_true", default=False,
-        help="Low-latency mode: stream PCM directly from Live API to speaker (~200ms to first audio)",
+        help="Low-latency mode: stream PCM straight to the speaker as it is "
+             "synthesized (~1.5s to first audio)",
+    )
+    parser.add_argument(
+        "--live-audio", action="store_true", default=False,
+        help="Use the Live native-audio model instead of the dedicated TTS model "
+             "(slower first audio, and returns silence for very short text)."
     )
     parser.add_argument(
         "--live", action=argparse.BooleanOptionalAction, default=True,
@@ -325,7 +331,8 @@ def main() -> None:
         print(f"→ Saved as default in {CONFIG_PATH}")
         sys.exit(0)
     if args.realtime:
-        print(f"→ Mode:       realtime (low-latency streaming)")
+        engine = "live native-audio" if args.live_audio else "dedicated TTS"
+        print(f"→ Mode:       realtime (low-latency streaming, {engine})")
     if args.prepare or not args.text:
         print(f"→ Prepare:    on (rewriting for speech)")
     if args.summarize:
@@ -418,13 +425,23 @@ def main() -> None:
         first_chunk_time = None
         est_duration = api.estimate_audio_duration(prepared)
         print("  Streaming...", end="", flush=True)
-        for pcm_chunk in api.stream_realtime_pcm(
-            prepared,
-            voice_name=args.voice,
-            character_name=character,
-            style=args.style,
-            log=_rt_log,
-        ):
+        if args.live_audio:
+            _producer = api.stream_realtime_pcm(
+                prepared,
+                voice_name=args.voice,
+                character_name=character,
+                style=args.style,
+                log=_rt_log,
+            )
+        else:
+            _producer = api.stream_tts_pcm(
+                prepared,
+                voice_name=args.voice,
+                character_name=character,
+                style=args.style,
+                log=_rt_log,
+            )
+        for pcm_chunk in _producer:
             if cancel_event.is_set():
                 break
             pcm_array = np.frombuffer(pcm_chunk, dtype=np.int16)
@@ -510,4 +527,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    # Flush explicitly: os._exit skips Python's atexit/buffer flushing, so a
+    # block-buffered stdout (i.e. any time we're piped, such as under the MCP
+    # server) would otherwise lose the final summary line.
+    sys.stdout.flush()
+    sys.stderr.flush()
     os._exit(0)  # bypass httpx/genai connection pool atexit handlers
